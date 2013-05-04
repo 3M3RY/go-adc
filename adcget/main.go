@@ -10,24 +10,23 @@ import (
 import "code.google.com/p/go-adc/adc"
 import "code.google.com/p/go-tiger/tiger"
 
+
+var ( // Commandline switches
+	searchTTH string
+	outputFilename string
+)
+
+func init() {
+	flag.StringVar(&searchTTH, "tth", "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ", "search for a given Tiger tree hash")
+	flag.StringVar(&outputFilename, "o", "", "save search reseult to given file")
+}
+
 func main() {
 	flag.Parse()
 
 	hubUrl := flag.Arg(0)
 	if hubUrl == "" {
 		fmt.Println("No hub address specified, exiting.")
-		return
-	}
-
-	hashToFind := flag.Arg(1)
-	if hashToFind == "" {
-		fmt.Println("No file hash specified, exiting.")
-		return
-	}
-
-	outputFilename := flag.Arg(2)
-	if outputFilename == "" {
-		fmt.Println("No output file hash specified, exiting.")
 		return
 	}
 
@@ -49,10 +48,7 @@ func main() {
 	hash := tiger.New()
 	fmt.Fprint(hash, hostname)
 	pid := adc.NewPrivateID(hash.Sum(nil))
-
-	//dispatcher, _ := adc.NewDownloadDispatcher(outputFilename)
-	//resultChan := dispatcher.ResultChannel()
-
+		
 	hub, err := adc.NewHub(hubUrl, pid)
 	if err != nil {
 		fmt.Printf("Could not connect; %s\n", err)
@@ -64,7 +60,16 @@ func main() {
 		return
 	}
 	
-	//hub.SearchByTTR(hashToFind, resultChan)
-	time.Sleep(1*time.Hour)
+	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
+		if fmt.Sprint(outputFilename) == "" {
+		fmt.Println("No output file specified, exiting.")
+			return
+		}
 
+		dispatcher, _ := adc.NewDownloadDispatcher(searchTTH, outputFilename)
+		resultChan := dispatcher.ResultChannel()
+		hub.SearchByTTR(searchTTH, resultChan)
+		dispatcher.Run()
+	}
+	time.Sleep(1*time.Hour)
 }

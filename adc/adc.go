@@ -10,28 +10,33 @@ import (
 )
 
 // An Error represents a numeric error response from a server.
-type Error struct {
+type Status struct {
 	Code int
 	Msg  string
 }
 
-func (e *Error) Error() string {
-	return fmt.Sprintf("%03d, %s", e.Code, e.Msg)
+func (s *Status) Error() string {
+	return fmt.Sprintf("%03d, %s", s.Code, s.Msg)
 }
 
 // A ProtocolError describes a protocol violation such
 // as an invalid response or a hung-up connection.
-type ProtocolError string
+type Error string
 
-func (p ProtocolError) Error() string {
-	return string(p)
+func (e Error) Error() string {
+	return string(e)
 }
 
 // Message represents an ADC protocol message
 type Message struct {
+	str    string
 	Type   byte
 	Cmd    string
 	Params []string
+}
+
+func (m *Message) String() string {
+	return m.str
 }
 
 // Identifier represents a PID, CID or SID

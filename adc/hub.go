@@ -2,6 +2,7 @@
 package adc
 
 import (
+	"crypto/rand"
 	"encoding/base32"
 	"fmt"
 	"hash"
@@ -94,6 +95,7 @@ func (h *Hub) Open() (err error) {
 	h.peers = make(map[string]*Peer)
 	h.searchRequestChan = make(chan *SearchRequest, 32)
 	h.searchResultChans = make(map[string](chan *SearchResult))
+	h.rcmChans  = make(map[string](chan uint16))
 
 	go func() {
 		for {
@@ -102,7 +104,6 @@ func (h *Hub) Open() (err error) {
 			if err != nil {
 				log.Fatal("error parsing reply: ", err)
 			}
-			// fmt.Println(message)
 			h.messages <- msg
 		}
 	}()
@@ -118,7 +119,7 @@ func (h *Hub) Open() (err error) {
 		for _, word := range msg.Params {
 			s = s + " " + word
 		}
-		return ProtocolError(s)
+		return Error(s)
 	}
 
 	for _, word := range msg.Params {
@@ -135,14 +136,14 @@ func (h *Hub) Open() (err error) {
 		h.cid = newClientID(h.pid, h.hasher)
 	} else {
 		h.conn.Close()
-		return ProtocolError("no common hash function")
+		return Error("no common hash function")
 	}
 
 	// Get SID from hub
 	msg = <-h.messages
 	if msg.Cmd != "SID" {
 		h.conn.Close()
-		return ProtocolError("did not receive SID assignment from hub")
+		return Error("did not receive SID assignment from hub")
 	}
 	h.sid = newSessionID(msg.Params[0])
 
@@ -166,7 +167,7 @@ func (h *Hub) Open() (err error) {
 			password, ok := h.url.User.Password()
 			if ok == false {
 				h.conn.Close()
-				return ProtocolError("hub requested a password but none was set")
+				return Error("hub requested a password but none was set")
 			}
 
 			nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
@@ -196,7 +197,7 @@ func (h *Hub) Open() (err error) {
 			if code == 0 {
 				fmt.Printf("%s\n", msg.Params[1])
 			} else {
-				return &Error{code, msg.Params[1]}
+				return &Status{code, msg.Params[1]}
 			}
 
 		default:
@@ -204,7 +205,7 @@ func (h *Hub) Open() (err error) {
 			for _, word := range msg.Params {
 				s = s + " " + word
 			}
-			return ProtocolError(s)
+			return Error(s)
 		}
 	}
 	return nil
@@ -268,14 +269,18 @@ func (h *Hub) runLoop() {
 				fmt.Printf("(status-%.3d) %s\n", code, NewParameterValue(msg.Params[1]))
 
 			case "CTM":
-				t := msg.Params[4]
-				c, ok := h.rcmChans[t]
+				
+				token := msg.Params[4]
+				c, ok := h.rcmChans[token]
 				if ok {
-					p, err := fmt.Sscan("%d", msg.Params[3])
-					if err == nil {
-						c <- uint16(p)
+					var port uint16
+					_, err := fmt.Sscanf(msg.Params[3], "%d", &port)
+					if err != nil {
+						fmt.Println("Did not receieve port in CTM message :" ,err)
+					} else {
+						c <- port
 					}
-					delete(h.rcmChans, t)
+					//delete(h.rcmChans, t)
 					//TODO close the channel
 				}
 
@@ -299,6 +304,83 @@ func (h *Hub) newPeer(sid string) *Peer {
 	}
 }
 
+func (h *Hub) PeerConn(p *Peer) (conn *Conn, err error) {
+
+	if p.features == nil {
+		p.features = make(map[string] bool)
+	}
+
+	b := make([]byte, 4)
+	_, err = rand.Read(b)
+	if err != nil {
+		return nil, err
+	}
+	token := fmt.Sprintf("%X", b)
+
+
+	portChan := h.ReverseConnectToMe(p, token)
+	port := <-portChan
+
+	
+	if addr, ok := p.info["I4"]; ok {
+		conn, err = Dial("tcp4", fmt.Sprintf("%s:%d", addr, port))
+	} else if addr, ok := p.info["I6"]; ok {
+		conn, err = Dial("tcp6", fmt.Sprintf("[%s]:%d", addr, port))
+	} else {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		return nil, Error("no address information for peer")
+	}
+	if err != nil {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		return nil, err
+	}
+
+	conn.WriteLine("CSUP ADBASE ADTIGR")
+	msg, err := conn.ReadMessage()
+	if err != nil {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		conn.Close()
+		return nil, err
+	}
+
+	if err != nil || msg.Cmd != "SUP" {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		conn.Close()
+		return nil, Error(msg.String())
+	}
+	for _, word := range msg.Params {
+		switch word[:2] {
+		case "AD" :
+			p.features[word[2:]] = true
+		default:
+			h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+			conn.Close()
+			return nil, Error(fmt.Sprintf("unknow word %s in CSUP", word))
+		}
+	}
+
+	err = conn.WriteLine("CINF ID%s TO%s", h.cid, token)
+	if err != nil {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		conn.Close()
+		return nil, err
+	}
+
+	msg, err = conn.ReadMessage()
+	if err != nil || msg.Cmd != "INF" {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		conn.Close()
+		return nil, err
+	}
+	if msg.Params[0][2:] != p.info["ID"] {
+		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
+		conn.Close()
+		return nil, Error("the CID reported by the hub and client do not match")
+	}
+
+	return conn, nil
+}
+
 // ReverseConnectToMe sends a RCM message to a Peer with token string.
 // A channel is returned that will carry the the port number in the 
 // CTM response. Be sure to use a fresh token, or will nothing will 
@@ -307,7 +389,7 @@ func (h *Hub) ReverseConnectToMe(p *Peer, token string) chan uint16 {
 	// RCM protocol separator token
 	c := make(chan uint16)
 	h.rcmChans[token] = c
-	h.conn.WriteLine("DRCM %s %s ADC/1.0 %X", h.sid, p.sid, token)
+	h.conn.WriteLine("DRCM %s %s ADC/1.0 %s", h.sid, p.sid, token)
 	return c
 }
 

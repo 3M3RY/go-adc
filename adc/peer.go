@@ -7,10 +7,10 @@ import (
 )
 
 type Peer struct {
-	hub  *Hub
-	sid  string
-	conn *Conn
-	info map[string]string
+	hub      *Hub
+	sid      string
+	features map[string]bool
+	info     map[string]string
 }
 
 func (p *Peer) Open() (err error) {

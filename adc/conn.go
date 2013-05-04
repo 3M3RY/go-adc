@@ -60,7 +60,7 @@ func (c *Conn) ReadMessage() (*Message, error) {
 	}
 	t := s[0]
 	words := strings.Fields(s[1:])
-	m := &Message{t, words[0], words[1:]}
+	m := &Message{s, t, words[0], words[1:]}
 	return m, nil
 }
 
