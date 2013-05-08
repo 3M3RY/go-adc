@@ -11,12 +11,15 @@ import (
 
 // An Error represents a numeric error response from a server.
 type Status struct {
-	Code int
-	Msg  string
+	str  string
 }
 
 func (s *Status) Error() string {
-	return fmt.Sprintf("%03d, %s", s.Code, s.Msg)
+	return s.str
+}
+
+func NewStatus(msg *Message) *Status {
+	return &Status{fmt.Sprintf("%s %v", msg.Params[0], NewParameterValue(msg.Params[1]))}
 }
 
 // A ProtocolError describes a protocol violation such

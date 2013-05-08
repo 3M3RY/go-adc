@@ -66,7 +66,12 @@ func main() {
 			return
 		}
 
-		dispatcher, _ := adc.NewDownloadDispatcher(searchTTH, outputFilename)
+		tth, err := adc.NewTigerTreeHash(searchTTH)
+		if err != nil {
+		fmt.Println("Invalid TTH:", err)
+		}
+
+		dispatcher, _ := adc.NewDownloadDispatcher(tth, outputFilename)
 		resultChan := dispatcher.ResultChannel()
 		hub.SearchByTTR(searchTTH, resultChan)
 		dispatcher.Run()

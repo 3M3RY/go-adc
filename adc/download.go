@@ -1,13 +1,16 @@
+// Copyright (c) 2013 Emery Hemingway
 package adc
 
 import (
 	"fmt"
 	"os"
+	"container/ring"
 )
 
-type chunk struct {
+type fileChunk struct {
+	digest []byte
 	seek uint64
-	size uint
+	size int
 }
 
 type DownloadDispatcher struct {
@@ -16,13 +19,13 @@ type DownloadDispatcher struct {
 	// If it knows how many peers there are, it can adjust 
 	// chuck size and determine how much to what level it should 
 	// request TTH leaves.
-	tth           string
+	tth           *TigerTreeHash
 	searchResults chan *SearchResult
-	chunks        chan chunk
+	chunks        *ring.Ring
 	file          *os.File
 }
 
-func NewDownloadDispatcher(tth, filename string) (*DownloadDispatcher, error) {
+func NewDownloadDispatcher(tth *TigerTreeHash, filename string) (*DownloadDispatcher, error) {
 	file, err := os.Create(filename)
 	if err != nil {
 		return nil, err
@@ -39,73 +42,53 @@ func (d *DownloadDispatcher) Run() {
 	defer d.file.Close()
 	r := <-d.searchResults
 
-	conn, err := r.hub.PeerConn(r.peer)
-	if err != nil {
-		fmt.Println("Error: could not connect to peer for hash tree: ", err)
-		return
-	}
-	defer conn.Close()
-	
-	// Get the full hash tree
-	tthField := fmt.Sprintf("TTH/%s", d.tth)
-	conn.WriteLine("CGET tthl %s 0 -1", tthField)
-
-	msg, err := conn.ReadMessage()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	switch msg.Cmd {
-	case "STA":
-		fmt.Println(msg)
-		return
-	case "SND":
-		if msg.Params[0] != "tthl" || msg.Params[1] != tthField || msg.Params[2] != "0" {
-			conn.WriteLine("CSTA 140 Invalid\\sarguments")
-			return
-		}
-	default:
-		fmt.Println("unhandled message: ", msg)
-		return
-	}
-
-	fmt.Println(msg)
-
-	var tthSize int
-	_, err = fmt.Sscanf(msg.Params[3], "%d", &tthSize)
-	if err != nil {
-		fmt.Println(err)
-		conn.WriteLine("CSTA 140 Error\\sparsing\\ssize: %v", NewParameterValue(err.Error()))
-		return
-	}
-	if tthSize < 0 {
-		conn.WriteLine("CSTA 140 Invalid\\sTTH\\ssize")
-		return
-	}
-	
-	b := make([]byte, tthSize)
-	
-	var pos int
-	for pos < tthSize {
-		n, err := conn.R.Read(b[pos:])
+	var leaves [][]byte
+	for {
+		conn, err := r.hub.PeerConn(r.peer)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Error: could not connect to peer for hash tree: ", err)
 			return
 		}
-		pos += n
-	}
-	
-	_, err = d.file.Write(b)
-	if err != nil {
-		fmt.Println(err)
-	}
 
+		leaves, err = r.peer.getTigerTreeHashLeaves(conn, d.tth)
+		if err == nil {
+			break
+		}
+	}
+		
+
+	var fileSize uint64
+	fmt.Println(r.fields)
+	_, err := fmt.Sscanf(r.fields["SI"], "%d", &fileSize)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("file size is: ", fileSize)
+	
+	leafCount := len(leaves)
+	d.chunks = ring.New(leafCount)
+
+	chunkSize := fileSize / uint64(leafCount)
+	var p uint64
+	var i int
+	fmt.Println(len(leaves))
+	for i := 0; i < leafCount; i++ {
+		chunk := d.chunks.Next()
+		chunk.Value = &fileChunk{leaves[i], p, int(chunkSize)}
+		p += chunkSize
+	}
+	chunk := d.chunks.Next()
+	chunk.Value = &fileChunk{leaves[i], p, int(fileSize - p)}
+		
+	fmt.Print(d.chunks.Len(), " chunks ", chunkSize, " long ")
+
+	// if a chunk is bigger than 65536, break the chunk down into 32768 sized pieces
+	// if there are two many chunks and not enough leaves, request more leaves
 }
 
 func (d *DownloadDispatcher) ResultChannel() chan *SearchResult {
 	return d.searchResults
 }
-
 
 /*
 func DownloadChunksFromPeer(p Peer, peerFilename, tree chan hashLeaf, chunks chan chunk) {

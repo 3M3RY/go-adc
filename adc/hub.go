@@ -197,7 +197,7 @@ func (h *Hub) Open() (err error) {
 			if code == 0 {
 				fmt.Printf("%s\n", msg.Params[1])
 			} else {
-				return &Status{code, msg.Params[1]}
+				return NewStatus(msg)
 			}
 
 		default:
@@ -262,7 +262,8 @@ func (h *Hub) runLoop() {
 
 			case "STA":
 				// TODO handle STA better
-				code, err := fmt.Sscan("%d", msg.Params[0])
+				var code uint8
+				_, err := fmt.Sscan(msg.Params[0], "%d", &code)
 				if err != nil {
 					panic(err)
 				}
