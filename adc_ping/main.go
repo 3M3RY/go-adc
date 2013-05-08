@@ -25,7 +25,7 @@ func printConfig() {
 	fmt.Println("user_count.draw AREA")
 
 
-	fmt.Println("multigraph size")
+	fmt.Println("multigraph sharesize")
 	fmt.Println("graph_title Share Size")
 	fmt.Println("graph_vlabel bytes")
 	fmt.Println("graph_args --base 1024 --lower-limit 0")
@@ -38,7 +38,7 @@ func printConfig() {
 	fmt.Println("share_size_average.draw LINE")
 
 
-	fmt.Println("multigraph file_count")
+	fmt.Println("multigraph filecount")
 	fmt.Println("graph_title File Count")
 	fmt.Println("graph_args --lower-limit 0")
 
@@ -47,11 +47,12 @@ func printConfig() {
 	fmt.Println("file_count_average.label Average Shared Files")
 	fmt.Println("file_count_average.draw LINE")
 
-	fmt.Println("multigraph file_size")
+
+	fmt.Println("multigraph filesize")
 	fmt.Println("graph_title Average File Size")
 	fmt.Println("graph_vlabel bytes")
-	fmt.Println("graph_args --base 1024--lower-limit 0")
-	fmt.Println("graph_scale yes ")
+	fmt.Println("graph_args --base 1024 --lower-limit 0")
+	fmt.Println("graph_scale yes")
 
 	fmt.Println("file_size_average.label Average File Size")
 	fmt.Println("file_size_average.draw LINE")
@@ -113,15 +114,15 @@ func main() {
 	fmt.Println("multigraph users")
 	fmt.Println("user_count.value", info["UC"])
 	
-	fmt.Println("multigraph size")
+	fmt.Println("multigraph sharesize")
 	fmt.Println("share_size_total.value", info["SS"])
 	fmt.Println("share_size_average.value", totalShareSize / userCount)
 
-	fmt.Println("multigraph file_count")
+	fmt.Println("multigraph filecount")
 	fmt.Println("file_count_total.value", info["SF"])
 	fmt.Println("file_count_average.value", totalFileCount / userCount)
 
-	fmt.Println("multigraph file_size")
+	fmt.Println("multigraph filesize")
 	fmt.Println("file_size_average.value", totalShareSize / totalFileCount)
 	os.Exit(0)
 }
