@@ -251,7 +251,6 @@ func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
 			return nil, err
 		}
 		if msg.Cmd == "INF" {
-			fmt.Println(msg.Params)
 			info = make(map[string]*ParameterValue)
 			for _, word := range msg.Params {
 				info[word[:2]] = NewParameterValue(word[2:])
