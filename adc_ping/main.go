@@ -113,7 +113,7 @@ func main() {
 	
 	fmt.Println("multigraph size")
 	fmt.Println("share_size_total.value", info["SS"])
-	fmt.Println("share_size_average.value ", totalShareSize / userCount)
+	fmt.Println("share_size_average.value", totalShareSize / userCount)
 
 	fmt.Println("multigraph file_count")
 	fmt.Println("file_count_total.value", info["SF"])
