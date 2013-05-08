@@ -54,7 +54,7 @@ func printConfig() {
 	fmt.Println("graph_scale yes ")
 
 	fmt.Println("file_size_average.label Average File Size")
-	fmt.Println("file_count_average.draw LINE
+	fmt.Println("file_size_average.draw LINE
 }
 
 func main() {
