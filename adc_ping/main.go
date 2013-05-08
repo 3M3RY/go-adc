@@ -111,7 +111,7 @@ func main() {
 	}
 	
 	fmt.Println("multigraph users")
-	fmt.Println("user_count.value ", info["UC"])
+	fmt.Println("user_count.value", info["UC"])
 	
 	fmt.Println("multigraph size")
 	fmt.Println("share_size_total.value", info["SS"])
