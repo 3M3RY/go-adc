@@ -8,7 +8,6 @@ import (
 	"hash"
 	"log"
 	"net/url"
-	"time"
 )
 
 import "code.google.com/p/go-tiger/tiger"
@@ -30,8 +29,7 @@ type Hub struct {
 	conn              *Conn
 	hasher            hash.Hash
 	features          map[string]bool
-	info              map[string]string
-	wait              time.Duration
+	info              map[string]*ParameterValue
 	log               log.Logger
 	peers             map[string]*Peer
 	messages          chan *Message
@@ -75,9 +73,10 @@ func NewHub(hubUrl string, pid *Identifier) (*Hub, error) {
 	}
 
 	hub := &Hub{
-		url:  u,
-		pid:  pid,
-		wait: time.Second * 8,
+		url:      u,
+		pid:      pid,
+		features: make(map[string]bool),
+		info:     make(map[string]*ParameterValue),
 	}
 
 	return hub, nil
@@ -90,12 +89,10 @@ func (h *Hub) Open() (err error) {
 		return
 	}
 	h.messages = make(chan *Message)
-	h.features = make(map[string]bool)
-	h.info = make(map[string]string)
 	h.peers = make(map[string]*Peer)
 	h.searchRequestChan = make(chan *SearchRequest, 32)
 	h.searchResultChans = make(map[string](chan *SearchResult))
-	h.rcmChans  = make(map[string](chan uint16))
+	h.rcmChans = make(map[string](chan uint16))
 
 	go func() {
 		for {
@@ -127,7 +124,7 @@ func (h *Hub) Open() (err error) {
 		case "AD":
 			h.features[word[2:]] = true
 		default:
-			log.Println("Error, unknow word %s in reply", word)
+			log.Println("Error, unknown word %s in SUP", word)
 		}
 	}
 
@@ -211,6 +208,60 @@ func (h *Hub) Open() (err error) {
 	return nil
 }
 
+func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
+	if h.conn != nil {
+		if h.features["PING"] {
+			return h.info, nil
+		} else {
+			return nil, Error("hub does not support PING")
+
+		}
+	}
+
+	conn, err := Dial("tcp", h.url.Host)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	conn.WriteLine("HSUP ADBASE ADTIGR ADPING")
+	msg, err := conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+
+	if msg.Cmd != "SUP" {
+		return nil, Error("did not receive SUP: " + msg.String())
+	}
+
+	for _, word := range msg.Params {
+		switch word[:2] {
+		case "AD":
+			h.features[word[2:]] = true
+		default:
+			return nil, Error("unknown word in SUP: " + word)
+		}
+	}
+	if !h.features["PING"] {
+		return nil, Error("hub does not support PING")
+	}
+	for {
+		msg, err := conn.ReadMessage()
+		if err != nil {
+			return nil, err
+		}
+		if msg.Cmd == "INF" {
+			fmt.Println(msg.Params)
+			info = make(map[string]*ParameterValue)
+			for _, word := range msg.Params {
+				info[word[:2]] = NewParameterValue(word[2:])
+			}
+			return info, nil
+		}
+	}
+	return nil, nil
+}
+
 func (h *Hub) runLoop() {
 	for {
 		select {
@@ -270,14 +321,14 @@ func (h *Hub) runLoop() {
 				fmt.Printf("(status-%.3d) %s\n", code, NewParameterValue(msg.Params[1]))
 
 			case "CTM":
-				
+
 				token := msg.Params[4]
 				c, ok := h.rcmChans[token]
 				if ok {
 					var port uint16
 					_, err := fmt.Sscanf(msg.Params[3], "%d", &port)
 					if err != nil {
-						fmt.Println("Did not receieve port in CTM message :" ,err)
+						fmt.Println("Did not receieve port in CTM message :", err)
 					} else {
 						c <- port
 					}
@@ -308,7 +359,7 @@ func (h *Hub) newPeer(sid string) *Peer {
 func (h *Hub) PeerConn(p *Peer) (conn *Conn, err error) {
 
 	if p.features == nil {
-		p.features = make(map[string] bool)
+		p.features = make(map[string]bool)
 	}
 
 	b := make([]byte, 4)
@@ -318,11 +369,9 @@ func (h *Hub) PeerConn(p *Peer) (conn *Conn, err error) {
 	}
 	token := fmt.Sprintf("%X", b)
 
-
 	portChan := h.ReverseConnectToMe(p, token)
 	port := <-portChan
 
-	
 	if addr, ok := p.info["I4"]; ok {
 		conn, err = Dial("tcp4", fmt.Sprintf("%s:%d", addr, port))
 	} else if addr, ok := p.info["I6"]; ok {
@@ -351,7 +400,7 @@ func (h *Hub) PeerConn(p *Peer) (conn *Conn, err error) {
 	}
 	for _, word := range msg.Params {
 		switch word[:2] {
-		case "AD" :
+		case "AD":
 			p.features[word[2:]] = true
 		default:
 			h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
