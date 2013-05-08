@@ -48,6 +48,7 @@ func printConfig() {
 
 	fmt.Println("multigraph file_size")
 	fmt.Println("graph_title Average File Size")
+	fmt.Println("graph_vlabel bytes")
 	fmt.Println("graph_args --base 1024--lower-limit 0")
 	fmt.Println("graph_scale yes ")
 
@@ -111,12 +112,12 @@ func main() {
 	fmt.Println("user_count.value ", info["UC"])
 	
 	fmt.Println("multigraph size")
-	fmt.Println("share_size_total.value ", info["SS"])
+	fmt.Println("share_size_total.value", info["SS"])
 	fmt.Println("share_size_average.value ", totalShareSize / userCount)
 
 	fmt.Println("multigraph file_count")
-	fmt.Println("file_count_total.value ", info["SF"])
-	fmt.Println("file_count_average.value ", totalFileCount / userCount)
+	fmt.Println("file_count_total.value", info["SF"])
+	fmt.Println("file_count_average.value", totalFileCount / userCount)
 
 	fmt.Println("multigraph file_size")
 	fmt.Println("file_size_average.value", totalShareSize / totalFileCount)
