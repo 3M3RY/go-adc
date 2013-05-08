@@ -56,7 +56,7 @@ func (e *UrlError) Error() string {
 	return fmt.Sprintf("%s: %s", e.url, e.msg)
 }
 
-func NewHub(hubUrl string, pid *Identifier) (*Hub, error) {
+func NewHub(hubUrl string) (*Hub, error) {
 	u, err := url.Parse(hubUrl)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,6 @@ func NewHub(hubUrl string, pid *Identifier) (*Hub, error) {
 
 	hub := &Hub{
 		url:      u,
-		pid:      pid,
 		features: make(map[string]bool),
 		info:     make(map[string]*ParameterValue),
 	}
@@ -83,11 +82,12 @@ func NewHub(hubUrl string, pid *Identifier) (*Hub, error) {
 }
 
 // Connect and authenticate to the hub
-func (h *Hub) Open() (err error) {
+func (h *Hub) Open(pid *Identifier) (err error) {
 	h.conn, err = Dial("tcp", h.url.Host)
 	if err != nil {
 		return
 	}
+	h.pid = pid
 	h.messages = make(chan *Message)
 	h.peers = make(map[string]*Peer)
 	h.searchRequestChan = make(chan *SearchRequest, 32)
