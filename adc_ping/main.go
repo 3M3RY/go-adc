@@ -43,8 +43,9 @@ func printConfig() {
 	fmt.Println("graph_args --lower-limit 0")
 
 	fmt.Println("file_count_total.label Total Shared Files")
+	fmt.Println("file_count_total.draw AREA")
 	fmt.Println("file_count_average.label Average Shared Files")
-	
+	fmt.Println("file_count_average.draw LINE")
 
 	fmt.Println("multigraph file_size")
 	fmt.Println("graph_title Average File Size")
@@ -53,6 +54,7 @@ func printConfig() {
 	fmt.Println("graph_scale yes ")
 
 	fmt.Println("file_size_average.label Average File Size")
+	fmt.Println("file_count_average.draw LINE
 }
 
 func main() {
