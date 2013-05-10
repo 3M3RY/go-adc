@@ -10,9 +10,8 @@ import (
 import "code.google.com/p/go-adc/adc"
 import "code.google.com/p/go-tiger/tiger"
 
-
 var ( // Commandline switches
-	searchTTH string
+	searchTTH      string
 	outputFilename string
 )
 
@@ -48,27 +47,27 @@ func main() {
 	hash := tiger.New()
 	fmt.Fprint(hash, hostname)
 	pid := adc.NewPrivateID(hash.Sum(nil))
-		
-	hub, err := adc.NewHub(hubUrl, pid)
+
+	hub, err := adc.NewHub(hubUrl)
 	if err != nil {
 		fmt.Printf("Could not connect; %s\n", err)
 		return
 	}
-	err = hub.Open()
+	err = hub.Open(pid)
 	if err != nil {
 		fmt.Printf("Could not connect; %s\n", err)
 		return
 	}
-	
+
 	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
 		if fmt.Sprint(outputFilename) == "" {
-		fmt.Println("No output file specified, exiting.")
+			fmt.Println("No output file specified, exiting.")
 			return
 		}
 
 		tth, err := adc.NewTigerTreeHash(searchTTH)
 		if err != nil {
-		fmt.Println("Invalid TTH:", err)
+			fmt.Println("Invalid TTH:", err)
 		}
 
 		dispatcher, _ := adc.NewDownloadDispatcher(tth, outputFilename)
@@ -76,5 +75,5 @@ func main() {
 		hub.SearchByTTR(searchTTH, resultChan)
 		dispatcher.Run()
 	}
-	time.Sleep(1*time.Hour)
+	time.Sleep(1 * time.Hour)
 }

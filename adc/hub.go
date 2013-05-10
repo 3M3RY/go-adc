@@ -1,8 +1,6 @@
-// Copyright (c) 2013 Emery Hemingway
 package adc
 
 import (
-	"crypto/rand"
 	"encoding/base32"
 	"fmt"
 	"hash"
@@ -178,16 +176,13 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 		case "INF":
 			//// NORMAL ////
 			sid := msg.Params[0]
-			p := h.newPeer(sid)
-			h.peers[sid] = p
-			for _, field := range msg.Params[1:] {
-				p.info[field[:2]] = field[2:]
-			}
-
 			if sid == h.sid.String() {
 				go h.runLoop()
 				return nil
 			}
+			p := h.newPeer(sid)
+			h.peers[sid] = p
+			updatePeer(p, msg)
 
 		case "STA":
 			code, _ := fmt.Sscan("%d", msg.Params[0])
@@ -273,10 +268,7 @@ func (h *Hub) runLoop() {
 					p = h.newPeer(peerSid)
 					h.peers[peerSid] = p
 				}
-				for _, word := range msg.Params[1:] {
-					p.info[word[:2]] = word[2:]
-				}
-				//fmt.Printf("Updating %s: %v\n", p.info["NI"], p.info)
+				updatePeer(p, msg)
 
 			case "MSG":
 				switch len(msg.Params) {
@@ -284,7 +276,7 @@ func (h *Hub) runLoop() {
 					fmt.Printf("<hub> %s\n", NewParameterValue(msg.Params[0]))
 				case 2:
 					p := h.peers[msg.Params[0]]
-					fmt.Printf("<%s> %s\n", p.info["NI"], NewParameterValue(msg.Params[1]))
+					fmt.Printf("<%s> %s\n", p.Nick, NewParameterValue(msg.Params[1]))
 				}
 
 			case "SCH":
@@ -295,32 +287,54 @@ func (h *Hub) runLoop() {
 				if h.sid.String() != msg.Params[1] {
 					panic("the second SID in a DRES message did not match our own")
 				}
-				peer := h.peers[msg.Params[0]]
-				fields := make(map[string]string)
-				for _, word := range msg.Params[2:] {
-					fields[word[:2]] = word[2:]
+				result := new(SearchResult)
+				result.peer = h.peers[msg.Params[0]]
+
+				var results chan *SearchResult
+				ok := true
+				for _, param := range msg.Params[2:] {
+					switch param[:2] {
+					case "FN":
+						result.filename = param[2:]
+					case "SI":
+						n, err := fmt.Sscan(param[2:], &result.size)
+						if err != nil || n != 1 {
+							fmt.Println("error parsing RES SI:", err)
+							ok = false
+
+						}
+					case "SL":
+						n, err := fmt.Sscan(param[2:], &result.peer.Slots)
+						if err != nil || n != 1{
+							fmt.Println("error parsing RES SL:", err)
+							ok = false
+						}
+					case "TR":
+						results, ok = h.searchResultChans[param[2:]]
+					}
 				}
-				result := &SearchResult{h, peer, fields}
-				tth, ok := fields["TR"]
 				if ok {
-					h.searchResultChans[tth] <- result
+					results <- result
 				}
 
 			case "QUI":
-				fmt.Println(h.peers[msg.Params[0]].info["NI"], "has quit")
-				//delete(h.peers, msg.Params[0])
+				sid := msg.Params[0]
+				fmt.Println(h.peers[sid].Nick, "has quit")
+				delete(h.peers, sid)
 
 			case "STA":
 				// TODO handle STA better
+				fmt.Println(msg)
+				/*
 				var code uint8
-				_, err := fmt.Sscan(msg.Params[0], "%d", &code)
+				_, err := fmt.Sscan(msg.Params[0], &code)
 				if err != nil {
-					panic(err)
+					panic(err.Error())
 				}
 				fmt.Printf("(status-%.3d) %s\n", code, NewParameterValue(msg.Params[1]))
+				 */
 
 			case "CTM":
-
 				token := msg.Params[4]
 				c, ok := h.rcmChans[token]
 				if ok {
@@ -341,93 +355,34 @@ func (h *Hub) runLoop() {
 			}
 
 		case r := <-h.searchRequestChan:
-			h.searchResultChans[r.tth] = r.result
+			h.searchResultChans[r.tth] = r.results
 			h.conn.WriteLine("BSCH %s TR%s", h.sid, r.tth)
+		}
+	}
+}
+
+func updatePeer(p *Peer, msg *Message) {
+	for _, field := range msg.Params[1:] {
+		switch field[:2] {
+		case "ID":
+			p.CID = field[2:]
+		case "I4":
+			p.I4 = field[2:]
+		case "I6":
+			p.I6 = field[2:]
+		case "SL":
+			fmt.Sscan(field[2:], p.Slots)
+		case "NI":
+			p.Nick = NewParameterValue(field[2:]).String()
 		}
 	}
 }
 
 func (h *Hub) newPeer(sid string) *Peer {
 	return &Peer{
-		sid:  sid,
-		hub:  h,
-		info: make(map[string]string),
+		hub: h,
+		SID: sid,
 	}
-}
-
-func (h *Hub) PeerConn(p *Peer) (conn *Conn, err error) {
-
-	if p.features == nil {
-		p.features = make(map[string]bool)
-	}
-
-	b := make([]byte, 4)
-	_, err = rand.Read(b)
-	if err != nil {
-		return nil, err
-	}
-	token := fmt.Sprintf("%X", b)
-
-	portChan := h.ReverseConnectToMe(p, token)
-	port := <-portChan
-
-	if addr, ok := p.info["I4"]; ok {
-		conn, err = Dial("tcp4", fmt.Sprintf("%s:%d", addr, port))
-	} else if addr, ok := p.info["I6"]; ok {
-		conn, err = Dial("tcp6", fmt.Sprintf("[%s]:%d", addr, port))
-	} else {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		return nil, Error("no address information for peer")
-	}
-	if err != nil {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		return nil, err
-	}
-
-	conn.WriteLine("CSUP ADBASE ADTIGR")
-	msg, err := conn.ReadMessage()
-	if err != nil {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		conn.Close()
-		return nil, err
-	}
-
-	if err != nil || msg.Cmd != "SUP" {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		conn.Close()
-		return nil, Error(msg.String())
-	}
-	for _, word := range msg.Params {
-		switch word[:2] {
-		case "AD":
-			p.features[word[2:]] = true
-		default:
-			h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-			conn.Close()
-			return nil, Error(fmt.Sprintf("unknow word %s in CSUP", word))
-		}
-	}
-
-	err = conn.WriteLine("CINF ID%s TO%s", h.cid, token)
-	if err != nil {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		conn.Close()
-		return nil, err
-	}
-
-	msg, err = conn.ReadMessage()
-	if err != nil || msg.Cmd != "INF" {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		conn.Close()
-		return nil, err
-	}
-	if msg.Params[0][2:] != p.info["ID"] {
-		h.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
-		conn.Close()
-		return nil, Error("the CID reported by the hub and client do not match")
-	}
-
-	return conn, nil
 }
 
 // ReverseConnectToMe sends a RCM message to a Peer with token string.
@@ -438,33 +393,18 @@ func (h *Hub) ReverseConnectToMe(p *Peer, token string) chan uint16 {
 	// RCM protocol separator token
 	c := make(chan uint16)
 	h.rcmChans[token] = c
-	h.conn.WriteLine("DRCM %s %s ADC/1.0 %s", h.sid, p.sid, token)
+	h.conn.WriteLine("DRCM %s %s ADC/1.0 %s", h.sid, p.SID, token)
 	return c
 }
 
-func (h *Hub) SearchByTTR(tth string, result chan *SearchResult) {
+func (h *Hub) SearchByTTR(tth string, results chan *SearchResult) {
 	r := &SearchRequest{
-		tth:    tth,
-		result: result,
+		tth:     tth,
+		results: results,
 	}
 	h.searchRequestChan <- r
 }
 
 func (h *Hub) Close() {
 	h.conn.Close()
-}
-
-type Search struct {
-	info map[string]string
-}
-
-type SearchRequest struct {
-	tth    string
-	result chan *SearchResult
-}
-
-type SearchResult struct {
-	hub    *Hub
-	peer   *Peer
-	fields map[string]string
 }

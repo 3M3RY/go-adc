@@ -1,9 +1,9 @@
-// Copyright (c) 2013 Emery Hemingway
+// Copyright 2013 Emery Hemingway.  All rights reserved
+
 package adc
 
 import (
 	"fmt"
-	//"crypto/rand"
 	"encoding/base32"
 	"hash"
 	"strings"

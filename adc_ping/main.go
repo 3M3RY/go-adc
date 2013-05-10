@@ -2,8 +2,11 @@
 //
 // adc_ping is a Munin plugin for graphing ADC hub statistics
 //
-// A hub URL must be specified through the environment. This url is used in graph labels so 
-// try not to use 'localhost.
+// A hub URL must be specified through the environment. This url 
+// is used in graph labels so try not to use 'localhost.
+// 
+// An example config
+// [adc_ping]
 // env.hub_address adc://some-host.net:1511
 
 package main
@@ -18,12 +21,12 @@ import "code.google.com/p/go-adc/adc"
 func printConfig() {
 	fmt.Println("multigraph users")
 	fmt.Println("graph_title Users")
+	fmt.Println("graph_vlabel users")
 	fmt.Println("graph_args --base 1000 --lower-limit 0")
 	fmt.Println("graph_scale yes")
 
 	fmt.Println("user_count.label Users")
 	fmt.Println("user_count.draw AREA")
-
 
 	fmt.Println("multigraph sharesize")
 	fmt.Println("graph_title Share Size")
@@ -37,16 +40,15 @@ func printConfig() {
 	fmt.Println("share_size_average.label Average User Share")
 	fmt.Println("share_size_average.draw LINE")
 
-
 	fmt.Println("multigraph filecount")
 	fmt.Println("graph_title File Count")
 	fmt.Println("graph_args --lower-limit 0")
+	fmt.Println("graph_vlabel files")
 
 	fmt.Println("file_count_total.label Total Shared Files")
 	fmt.Println("file_count_total.draw AREA")
 	fmt.Println("file_count_average.label Average Shared Files")
 	fmt.Println("file_count_average.draw LINE")
-
 
 	fmt.Println("multigraph filesize")
 	fmt.Println("graph_title Average File Size")
@@ -110,19 +112,19 @@ func main() {
 		fmt.Printf("error: could not parse file count", err)
 		os.Exit(-1)
 	}
-	
+
 	fmt.Println("multigraph users")
 	fmt.Println("user_count.value", info["UC"])
-	
+
 	fmt.Println("multigraph sharesize")
 	fmt.Println("share_size_total.value", info["SS"])
-	fmt.Println("share_size_average.value", totalShareSize / userCount)
+	fmt.Println("share_size_average.value", totalShareSize/userCount)
 
 	fmt.Println("multigraph filecount")
 	fmt.Println("file_count_total.value", info["SF"])
-	fmt.Println("file_count_average.value", totalFileCount / userCount)
+	fmt.Println("file_count_average.value", totalFileCount/userCount)
 
 	fmt.Println("multigraph filesize")
-	fmt.Println("file_size_average.value", totalShareSize / totalFileCount)
+	fmt.Println("file_size_average.value", totalShareSize/totalFileCount)
 	os.Exit(0)
 }

@@ -1,4 +1,3 @@
-// Copyright (c) 2013 Emery Hemingway
 package adc
 
 import (
@@ -40,6 +39,9 @@ func NewConn(conn io.ReadWriteCloser) *Conn {
 }
 
 func (c *Conn) Close() error {
+	if c == nil {
+		return nil
+	}
 	return c.conn.Close()
 }
 
@@ -85,6 +87,9 @@ func NewReader(r *bufio.Reader) *Reader {
 // eliding the final \n from the return string.
 func (r *Reader) ReadLine() (string, error) {
 	line, err := r.readLineSlice()
+	if err != nil {
+		return "", err
+	}
 	messageType := line[0]
 	switch messageType {
 	case MessageTypeB: // Broadcast
