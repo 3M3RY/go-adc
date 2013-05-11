@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 )
 
@@ -43,16 +42,6 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	return c.conn.Close()
-}
-
-// Dial connects to the give address on the given network using net.Dial
-// and then returns a new Conn for the connection.
-func Dial(network, addr string) (*Conn, error) {
-	c, err := net.Dial(network, addr)
-	if err != nil {
-		return nil, err
-	}
-	return NewConn(c), nil
 }
 
 func (c *Conn) ReadMessage() (*Message, error) {

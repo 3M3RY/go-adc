@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"fmt"
+	"net"
 	"sync"
 )
 
@@ -102,10 +103,11 @@ func (p *Peer) connect() (err error) {
 	portChan := p.hub.ReverseConnectToMe(p, token)
 	port := <-portChan
 
+	var c net.Conn
 	if len(p.I4) > 8 {
-		p.conn, err = Dial("tcp4", fmt.Sprintf("%s:%d", p.I4, port))
+		c, err = net.Dial("tcp4", fmt.Sprintf("%s:%d", p.I4, port))
 	} else if len(p.I6) > 8 {
-		p.conn, err = Dial("tcp6", fmt.Sprintf("[%s]:%d", p.I6, port))
+		c, err = net.Dial("tcp6", fmt.Sprintf("[%s]:%d", p.I6, port))
 	} else {
 		p.hub.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
 		return Error("no address information for peer")
@@ -114,6 +116,7 @@ func (p *Peer) connect() (err error) {
 		p.hub.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)
 		return err
 	}
+	p.conn = NewConn(c)
 
 	p.conn.WriteLine("CSUP ADBASE ADTIGR")
 	msg, err := p.conn.ReadMessage()

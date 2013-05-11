@@ -1,10 +1,12 @@
 package adc
 
 import (
+	"crypto/tls"
 	"encoding/base32"
 	"fmt"
 	"hash"
 	"log"
+	"net"
 	"net/url"
 )
 
@@ -60,16 +62,6 @@ func NewHub(hubUrl string) (*Hub, error) {
 		return nil, err
 	}
 
-	switch u.Scheme {
-	case "adc":
-		{
-		}
-	case "adcs":
-		return nil, &UrlError{u, "TLS ecryption is not supported"}
-	default:
-		return nil, &UrlError{u, "unrecognized URL format"}
-	}
-
 	hub := &Hub{
 		url:      u,
 		features: make(map[string]bool),
@@ -81,10 +73,28 @@ func NewHub(hubUrl string) (*Hub, error) {
 
 // Connect and authenticate to the hub
 func (h *Hub) Open(pid *Identifier) (err error) {
-	h.conn, err = Dial("tcp", h.url.Host)
-	if err != nil {
-		return
+
+	switch h.url.Scheme {
+	case "adc":
+		c, err := net.Dial("tcp", h.url.Host)
+		if err != nil {
+			return err
+		}
+		h.conn = NewConn(c)
+
+	case "adcs":
+		// don't verify the name in cert because it should be blank
+		// instead I really need to support the KEYP extension
+		c, err := tls.Dial("tcp", h.url.Host, &tls.Config{InsecureSkipVerify: true})
+		if err != nil {
+			return err
+		}
+		h.conn = NewConn(c)
+
+	default:
+		return &UrlError{h.url, "unrecognized URL format"}
 	}
+
 	h.pid = pid
 	h.messages = make(chan *Message)
 	h.peers = make(map[string]*Peer)
@@ -147,10 +157,10 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 	if h.url.User != nil {
 		nick = h.url.User.Username()
 	} else {
-		nick = "adc.go"
+		nick = "go-adc"
 	}
 
-	h.conn.WriteLine("BINF %s ID%s PD%s SS0 SF0 APadcget VE0.0 SL0 NI%v CT64",
+	h.conn.WriteLine("BINF %s ID%s PD%s SS0 SF0 APadcget VE0.0 SL0 NI%v",
 		h.sid, h.cid, h.pid, NewParameterValue(nick))
 
 	for {
@@ -192,8 +202,21 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 				return NewStatus(msg)
 			}
 
+		case "QUI":
+			var reason string
+			for _, field := range msg.Params {
+				switch field[:2] {
+				case "MS":
+					reason = field[2:]
+				}
+			}
+			return Error(fmt.Sprintf("kicked by hub: \"%s\"", NewParameterValue(reason)))
+
+		case "MSG":
+			fmt.Printf("<hub> %s\n", NewParameterValue(msg.Params[0]))
+
 		default:
-			s := "unknown message recieved before INF list :"
+			s := "unknown message recieved before INF list : " + msg.Cmd
 			for _, word := range msg.Params {
 				s = s + " " + word
 			}
@@ -213,10 +236,11 @@ func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
 		}
 	}
 
-	conn, err := Dial("tcp", h.url.Host)
+	c, err := net.Dial("tcp", h.url.Host)
 	if err != nil {
 		return nil, err
 	}
+	conn := NewConn(c)
 	defer conn.Close()
 
 	conn.WriteLine("HSUP ADBASE ADTIGR ADPING")
@@ -305,7 +329,7 @@ func (h *Hub) runLoop() {
 						}
 					case "SL":
 						n, err := fmt.Sscan(param[2:], &result.peer.Slots)
-						if err != nil || n != 1{
+						if err != nil || n != 1 {
 							fmt.Println("error parsing RES SL:", err)
 							ok = false
 						}
@@ -326,13 +350,13 @@ func (h *Hub) runLoop() {
 				// TODO handle STA better
 				fmt.Println(msg)
 				/*
-				var code uint8
-				_, err := fmt.Sscan(msg.Params[0], &code)
-				if err != nil {
-					panic(err.Error())
-				}
-				fmt.Printf("(status-%.3d) %s\n", code, NewParameterValue(msg.Params[1]))
-				 */
+					var code uint8
+					_, err := fmt.Sscan(msg.Params[0], &code)
+					if err != nil {
+						panic(err.Error())
+					}
+					fmt.Printf("(status-%.3d) %s\n", code, NewParameterValue(msg.Params[1]))
+				*/
 
 			case "CTM":
 				token := msg.Params[4]
