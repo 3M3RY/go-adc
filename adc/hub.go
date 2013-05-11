@@ -1,6 +1,8 @@
 package adc
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base32"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"strings"
 )
 
 import "code.google.com/p/go-tiger/tiger"
@@ -73,27 +76,53 @@ func NewHub(hubUrl string) (*Hub, error) {
 
 // Connect and authenticate to the hub
 func (h *Hub) Open(pid *Identifier) (err error) {
+	var digest hash.Hash
+	var keyPrint []byte
+	q := h.url.Query()
+	v, ok := q["kp"]
+	if ok {
+		params := strings.Split(v[0], "/")
+		switch params[0] {
+		case "SHA256":
+			digest = sha256.New()
+			keyPrint, err = base32.StdEncoding.DecodeString(params[1] + "====")
+			if err != nil {
+				return err
+			}
+		default:
+			return Error(params[0] + " KEYP verification is not supported")
+		}
+	}
 
 	switch h.url.Scheme {
 	case "adc":
+		if digest != nil {
+			return Error("KEYP specified but adcs:// was not")
+		}
 		c, err := net.Dial("tcp", h.url.Host)
 		if err != nil {
 			return err
 		}
 		h.conn = NewConn(c)
 
+
 	case "adcs":
-		// don't verify the name in cert because it should be blank
-		// instead I really need to support the KEYP extension
 		c, err := tls.Dial("tcp", h.url.Host, &tls.Config{InsecureSkipVerify: true})
 		if err != nil {
 			return err
 		}
+		if digest != nil {
+			digest.Write(c.ConnectionState().PeerCertificates[0].Raw)
+			if !bytes.Equal(digest.Sum(nil), keyPrint) {
+				return Error("KEYP verification failed, potential man-in-the-middle attack detected")
+			}
+		}		
 		h.conn = NewConn(c)
-
+		
 	default:
 		return &UrlError{h.url, "unrecognized URL format"}
 	}
+
 
 	h.pid = pid
 	h.messages = make(chan *Message)

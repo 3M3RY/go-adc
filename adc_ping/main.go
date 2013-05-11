@@ -2,12 +2,13 @@
 //
 // adc_ping is a Munin plugin for graphing ADC hub statistics
 //
-// A hub URL must be specified through the environment. This url 
-// is used in graph labels so try not to use 'localhost.
+// A hub URL must be specified through the environment variable
+// ${hub_url}. This url is used in graph labels so try not to 
+// use 'localhost.
 // 
 // An example config
 // [adc_ping]
-// env.hub_address adc://some-host.net:1511
+// env.hub_url adc://some-host.net:1511
 
 package main
 
