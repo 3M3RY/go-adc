@@ -163,7 +163,7 @@ func (p *Peer) connect() (err error) {
 	return nil
 }
 
-// Fetch and verify a row of leaves from a client P.Conn
+// Fetch and verify a row of leaves from Peer 
 func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err error) {
 	if p.conn == nil {
 		panic("Peer.conn was nil")
@@ -237,10 +237,4 @@ func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err 
 	}
 
 	return
-}
-
-type sequencer struct {
-	mu   sync.Mutex
-	id   uint
-	wait map[uint]chan uint
 }

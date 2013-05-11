@@ -3,6 +3,8 @@ package adc
 import (
 	"fmt"
 	"os"
+	"sync"
+	"time"
 )
 
 type fileChunk struct {
@@ -11,11 +13,6 @@ type fileChunk struct {
 }
 
 type DownloadDispatcher struct {
-	// Maybe the dispatcher should collect the searh results 
-	// so that it knows how many peers there are available.
-	// If it knows how many peers there are, it can adjust 
-	// chuck size and determine how much to what level it should 
-	// request TTH leaves.
 	tth            *TigerTreeHash
 	resultChan     chan *SearchResult
 	results        int
@@ -24,6 +21,9 @@ type DownloadDispatcher struct {
 	chunks         []*fileChunk
 	filename       string
 	file           *os.File
+	fileSeek       uint64
+	fileSize       uint64
+	chunkMu        sync.Mutex
 }
 
 func NewDownloadDispatcher(tth *TigerTreeHash, filename string) (*DownloadDispatcher, error) {
@@ -32,13 +32,19 @@ func NewDownloadDispatcher(tth *TigerTreeHash, filename string) (*DownloadDispat
 		resultChan: make(chan *SearchResult, 32), //buffered for safety
 		filename:   filename,
 	}
+	d.chunkMu.Lock()
 	return d, nil
 }
 
+func (d *DownloadDispatcher) ResultChannel() chan *SearchResult {
+	return d.resultChan
+}
+
 func (d *DownloadDispatcher) Run() {
-	var leaves [][]byte
-	var fileSize uint64
+	var leafHashValues [][]byte
 	var result *SearchResult
+
+	// I should check the file sizes on results coming in
 
 	for result = range d.resultChan {
 		peer := result.peer
@@ -49,81 +55,98 @@ func (d *DownloadDispatcher) Run() {
 			continue
 		}
 
-		leaves, err = peer.getTigerTreeHashLeaves(d.tth)
+		leafHashValues, err = peer.getTigerTreeHashLeaves(d.tth)
 		peer.EndSession(sessionId)
 		if err != nil {
 			fmt.Printf("Error: could not get leaves from %v: %v\n", peer.Nick, err)
 			continue
 		} else {
-			fileSize = result.size
+			d.fileSize = result.size
+			go downloadWorker(d, result)
 			break
 		}
 	}
 
-	/*
-	go func() {
-		for result := range d.resultChan {
-			go downloadWorker(d, result)
-			d.results++
-		}
-	}()
-	*/
-
-	fmt.Println("file size is: ", fileSize)
-	fmt.Println("leaf count is:", len(leaves))
-
 	d.pendingChunks = make(chan *fileChunk)
 	d.finishedChunks = make(chan *fileChunk)
-	go downloadWorker(d, result)
-	d.results++
 
-	chunkSize := fileSize / uint64(d.results*2)
+	go func() {
+		for result := range d.resultChan {
+			if result.size != d.fileSize {
+				_, err := result.peer.getTigerTreeHashLeaves(d.tth)
+				if err != nil {
+					fmt.Printf("Error: could not get leaves from %v: %v\n", result.peer.Nick, err)
+					continue
+				} else {
+					panic("two hosts presented valid hash tree leaves but different file sizes")
+				}
+			}
+			go downloadWorker(d, result)
+		}
+	}()
+
+	fmt.Println("file size is: ", d.fileSize)
+	fmt.Println("leaf count is:", len(leafHashValues))
 
 	var err error
 	d.file, err = os.Create(d.filename)
 	if err != nil {
 		fmt.Println(err)
 	}
-
-	var start uint64
-	end := chunkSize
-	for start < fileSize {
-		d.pendingChunks <- &fileChunk{start, end}
-		start += chunkSize
-		end += chunkSize
-	}
+	d.chunkMu.Unlock()
 }
 
-func (d *DownloadDispatcher) ResultChannel() chan *SearchResult {
-	return d.resultChan
+func (d *DownloadDispatcher) getChunk(size uint64) *fileChunk {
+	d.chunkMu.Lock()
+	defer d.chunkMu.Unlock()
+	if d.fileSeek == d.fileSize {
+		return nil
+	}
+
+	c := new(fileChunk)
+	c.start = d.fileSeek
+
+	newSeek := d.fileSeek + size
+	if newSeek > d.fileSize {
+		c.size = d.fileSize - d.fileSeek
+		d.fileSeek = d.fileSize
+	} else {
+		c.size = size
+		d.fileSeek = newSeek
+	}
+	return c
 }
 
 func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
+	p := r.peer
 	identifier := "TTH/" + d.tth.String()
-	var start uint64
-	var size uint64
-	
-	peer := r.peer
+	requestSize := uint64(65536)
+	for {
+		chunk := d.getChunk(requestSize)
+		if chunk == nil {
+			break
+		}
 
-	for chunk := range d.pendingChunks {
-		sessionId := peer.NextSessionId()
-		err := peer.StartSession(sessionId)
+		sessionId := p.NextSessionId()
+		err := p.StartSession(sessionId)
 		if err != nil {
-			fmt.Println("could not open session with %v: %s", peer.Nick, err)
+			fmt.Println("could not open session with %v: %s", p.Nick, err)
 			return
 		}
-		err = peer.conn.WriteLine("CGET file %s %d %d", identifier, chunk.start, chunk.size)
+		err = p.conn.WriteLine("CGET file %s %d %d", identifier, chunk.start, chunk.size)
 		if err != nil {
 			d.pendingChunks <- chunk
 			return
 		}
 
-		msg, err := peer.conn.ReadMessage()
+		msg, err := p.conn.ReadMessage()
 		if err != nil {
 			d.pendingChunks <- chunk
 			return
 		}
-		
+		var start uint64
+		var size uint64
+
 		switch msg.Cmd {
 		case "STA":
 			fmt.Println(msg)
@@ -131,7 +154,7 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			return
 		case "SND":
 			if msg.Params[0] != "file" || msg.Params[1] != identifier {
-				peer.conn.WriteLine("CSTA 140 invalid\\sarguments.")
+				p.conn.WriteLine("CSTA 140 invalid\\sarguments.")
 				fmt.Println("sending a chunk back to d.pendingChunks because of", msg.Params)
 				d.pendingChunks <- chunk
 				return
@@ -139,7 +162,7 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			fmt.Sscan(msg.Params[2], &start)
 			fmt.Sscan(msg.Params[3], &size)
 			if start < chunk.start || size > chunk.size {
-				peer.conn.WriteLine("CSTA 140 invalid\\sfile\\srange")
+				p.conn.WriteLine("CSTA 140 invalid\\sfile\\srange")
 				fmt.Println("sending a chunk back to d.pendingChunks because of", msg.Params)
 				d.pendingChunks <- chunk
 				return
@@ -152,17 +175,19 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 		}
 		buf := make([]byte, size)
 		var pos int
+
+		startOfTransfer := time.Now()
 		for pos < int(size) {
-			n, err := peer.conn.R.Read(buf[pos:])
-			fmt.Println("Wrote", n, "bytes from Peer.conn")
+			n, err := p.conn.R.Read(buf[pos:])
+			fmt.Println("Wrote", n, "bytes from P.conn")
 			if err != nil {
 				d.pendingChunks <- chunk
-				peer.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
+				p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
 				return
 			}
 			pos += n
 		}
-		peer.EndSession(sessionId)
+		p.EndSession(sessionId)
 
 		n, err := d.file.WriteAt(buf, int64(start))
 		fmt.Println("Wrote", n, "bytes to file")
@@ -171,98 +196,17 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			fmt.Println("sending a chunk back to d.pendingChunks because of", err)
 			d.pendingChunks <- &fileChunk{start + size, chunk.size - size}
 		}
-		
+
+		// a logarithmic increase seems like a good idea,
+		// we want peers on a LAN to blow away the others
+		duration := time.Since(startOfTransfer)
+		if duration < time.Minute {
+			requestSize *= 2
+		} else if duration > time.Minute*4 {
+			requestSize /= 2
+		}
+
 		//d.finishedChunks <- &fileChunk{start, size}
-		fmt.Println("finished a worker run")
 	}
+	fmt.Println("finished a worker run")
 }
-
-/*
-func DownloadChunksFromPeer(p Peer, peerFilename, tree chan hashLeaf, chunks chan chunk) {
-	conn, err := hub
-
-	err = p.Open()
-	if err != nil {
-		fmt.Println(err)
-		return err
-	}
-	defer p.conn.Close()
-
-	for chunk := range chunks {
-		// GET type identifier start_pos bytes
-		p.conn.WriteLine("CGET file %s %d %d", peerFilename, chunk.seek, chunk.size)
-
-		msg, err := p.conn.ReadMessage()
-		if err != nil {
-			fmt.Println(err)
-			return nil
-		}
-		var sndSeek int
-		var sndSize int
-		switch msg.Cmd {
-		case "SND":
-			// SND type identifier start_pos bytes
-			if msg.Params[0] != "file" {
-				// TODO return an error
-				fmt.Println("SND response had a type other than file: ", msg.Params[0])
-				return nil
-			}
-			if msg.Params[1] != peerFilename {
-				fmt.Println("SND response had a filename other than what was requested: ", msg.Params[1])
-				// TODO return an error
-				return nil
-			}
-			sndSeek, err = fmt.Sscan("%d", msg.Params[2])
-			if err != nil {
-				fmt.Println(err)
-				return err
-			}
-			sndSize, err = fmt.Sscan("%d", msg.Params[3])
-			if err != nil {
-				fmt.Println(err)
-				return err
-			}
-		default:
-			return nil
-		}
-
-		// read from the client
-		buf := make([]byte, sndSize, sndSize)
-		n, err := p.conn.Read(buf)
-		if err != nil {
-			chunks <- chunk
-		}
-
-	}
-
-
-	for leaf := range tree {
-
-
-
-
-		hash.Write(chunk.buf)
-		if hash.Sum(nil) == leaf.digest {
-			chunks <- chunk
-		}
-
-	}
-}
-
-func writeToFile(filename string, chunks chan chunk, errChan chan error) {
-	file, err := os.Open(filename)
-	defer file.Close()
-	if err != nil {
-		errChan <- err
-		return
-	}
-
-	for chunk := range chunks {
-		_, err := file.WriteAt(chunk.buffer, chunk.position)
-		if err != nil {
-			errChan <- err
-			return
-		}
-	}
-}
-*/

@@ -372,7 +372,7 @@ func (h *Hub) runLoop() {
 
 			case "QUI":
 				sid := msg.Params[0]
-				fmt.Println(h.peers[sid].Nick, "has quit")
+				fmt.Println("-", h.peers[sid].Nick, "has quit -")
 				delete(h.peers, sid)
 
 			case "STA":
