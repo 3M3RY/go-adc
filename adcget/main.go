@@ -135,14 +135,18 @@ func httpClient(url *url.URL) {
 		fmt.Println(err)
 		os.Exit(-1)
 	}
-	fmt.Println(res)
 
 	w := bufio.NewWriter(file)
-	size, err := io.Copy(w, res.Body)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(-1)
+
+	n := int64(1)
+	for n > 0 {
+		n, err = io.Copy(w, res.Body)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(-1)
+		}
 	}
-	fmt.Printf("\nDownloaded %d bytes in %s\n", size, time.Since(start))
+	w.Flush()
+	//fmt.Printf("\nDownloaded %d bytes in %s\n", , time.Since(start))
 	os.Exit(0)
 }
