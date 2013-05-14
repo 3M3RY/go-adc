@@ -41,12 +41,16 @@ func (p *Peer) NextSessionId() uint {
 
 // StartSession waits until it is time for the 
 // session with id to begin.
-func (p *Peer) StartSession(id uint) error {
+func (p *Peer) StartSession(id uint) (err error) {
 	p.sessionMu.Lock()
 	if p.sessionId == id {
 		if p.conn == nil {
+			err = p.connect()
+			if err != nil {
+				return err
+			}
 			p.sessionMu.Unlock()
-			return p.connect()
+			return err
 		} else {
 			p.sessionMu.Unlock()
 			return nil
@@ -61,9 +65,10 @@ func (p *Peer) StartSession(id uint) error {
 	<-c
 	
 	if p.conn == nil {
-		return p.connect()
+		err =  p.connect()
+			return
 	}
-	return nil
+	return
 }
 
 // EndSession notifies the Peer that the session with the 
@@ -160,6 +165,7 @@ func (p *Peer) connect() (err error) {
 		p.conn.Close()
 		return Error("the CID reported by the hub and client do not match")
 	}
+	p.hub.log.Println("--> connected to", p.Nick)
 	return nil
 }
 

@@ -25,20 +25,20 @@ const (
 )
 
 type Hub struct {
-	url               *url.URL
-	pid               *Identifier
-	cid               *Identifier
-	sid               *Identifier
-	conn              *Conn
-	hasher            hash.Hash
-	features          map[string]bool
-	info              map[string]*ParameterValue
-	log               log.Logger
-	peers             map[string]*Peer
-	messages          chan *Message
+	url                   *url.URL
+	pid                   *Identifier
+	cid                   *Identifier
+	sid                   *Identifier
+	conn                  *Conn
+	hasher                hash.Hash
+	features              map[string]bool
+	info                  map[string]*ParameterValue
+	log                   *log.Logger
+	peers                 map[string]*Peer
+	messages              chan *Message
 	searchRequestChan chan *SearchRequest
 	searchResultChans map[string](chan *SearchResult)
-	rcmChans          map[string](chan uint16)
+	rcmChans              map[string](chan uint16)
 }
 
 type HubError struct {
@@ -50,32 +50,21 @@ func (e *HubError) Error() string {
 	return fmt.Sprintf("%s: %s", e.hub.url, e.msg)
 }
 
-type UrlError struct {
-	url *url.URL
-	msg string
-}
-
-func (e *UrlError) Error() string {
-	return fmt.Sprintf("%s: %s", e.url, e.msg)
-}
-
-func NewHub(hubUrl string) (*Hub, error) {
-	u, err := url.Parse(hubUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	hub := &Hub{
-		url:      u,
-		features: make(map[string]bool),
-		info:     make(map[string]*ParameterValue),
-	}
-
-	return hub, nil
-}
-
 // Connect and authenticate to the hub
-func (h *Hub) Open(pid *Identifier) (err error) {
+func NewHub(pid *Identifier, url *url.URL, logger *log.Logger) (h *Hub, err error) {
+	h = &Hub{
+		url:               url,
+		pid:               pid,
+		features:          make(map[string]bool),
+		info:              make(map[string]*ParameterValue),
+		messages:          make(chan *Message),
+		log:               logger,
+		peers:             make(map[string]*Peer),
+		searchRequestChan: make(chan *SearchRequest, 32),
+		searchResultChans: make(map[string](chan *SearchResult)),
+		rcmChans:          make(map[string](chan uint16)),
+	}
+
 	var digest hash.Hash
 	var keyPrint []byte
 	q := h.url.Query()
@@ -87,56 +76,46 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 			digest = sha256.New()
 			keyPrint, err = base32.StdEncoding.DecodeString(params[1] + "====")
 			if err != nil {
-				return err
+				return nil, err
 			}
 		default:
-			return Error(params[0] + " KEYP verification is not supported")
+			return nil, Error(params[0] + " KEYP verification is not supported")
 		}
 	}
 
 	switch h.url.Scheme {
 	case "adc":
 		if digest != nil {
-			return Error("KEYP specified but adcs:// was not")
+			return nil, Error("KEYP specified but adcs:// was not")
 		}
 		c, err := net.Dial("tcp", h.url.Host)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		h.conn = NewConn(c)
-
 
 	case "adcs":
 		c, err := tls.Dial("tcp", h.url.Host, &tls.Config{InsecureSkipVerify: true})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if digest != nil {
 			digest.Write(c.ConnectionState().PeerCertificates[0].Raw)
 			if !bytes.Equal(digest.Sum(nil), keyPrint) {
-				return Error("KEYP verification failed, potential man-in-the-middle attack detected")
+				return nil, Error("KEYP verification failed, potential man-in-the-middle attack detected")
 			}
-		}		
+		}
 		h.conn = NewConn(c)
-		
+
 	default:
-		return &UrlError{h.url, "unrecognized URL format"}
+		return nil, Error(h.url.String() + "unrecognized URL format")
 	}
-
-
-	h.pid = pid
-	h.messages = make(chan *Message)
-	h.peers = make(map[string]*Peer)
-	h.searchRequestChan = make(chan *SearchRequest, 32)
-	h.searchResultChans = make(map[string](chan *SearchResult))
-	h.rcmChans = make(map[string](chan uint16))
 
 	go func() {
 		for {
-			// block here for incoming messages
 			msg, err := h.conn.ReadMessage()
 			if err != nil {
-				log.Fatal("error parsing reply: ", err)
+				h.log.Fatal("error parsing reply: ", err)
 			}
 			h.messages <- msg
 		}
@@ -153,7 +132,7 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 		for _, word := range msg.Params {
 			s = s + " " + word
 		}
-		return Error(s)
+		return nil, Error(s)
 	}
 
 	for _, word := range msg.Params {
@@ -161,7 +140,7 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 		case "AD":
 			h.features[word[2:]] = true
 		default:
-			log.Println("Error, unknown word %s in SUP", word)
+			h.log.Println("Error, unknown word %s in SUP", word)
 		}
 	}
 
@@ -170,14 +149,14 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 		h.cid = newClientID(h.pid, h.hasher)
 	} else {
 		h.conn.Close()
-		return Error("no common hash function")
+		return nil, Error("no common hash function")
 	}
 
 	// Get SID from hub
 	msg = <-h.messages
 	if msg.Cmd != "SID" {
 		h.conn.Close()
-		return Error("did not receive SID assignment from hub")
+		return nil, Error("did not receive SID assignment from hub")
 	}
 	h.sid = newSessionID(msg.Params[0])
 
@@ -201,7 +180,7 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 			password, ok := h.url.User.Password()
 			if ok == false {
 				h.conn.Close()
-				return Error("hub requested a password but none was set")
+				return nil, Error("hub requested a password but none was set")
 			}
 
 			nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
@@ -217,7 +196,7 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 			sid := msg.Params[0]
 			if sid == h.sid.String() {
 				go h.runLoop()
-				return nil
+				return h, nil
 			}
 			p := h.newPeer(sid)
 			h.peers[sid] = p
@@ -226,9 +205,9 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 		case "STA":
 			code, _ := fmt.Sscan("%d", msg.Params[0])
 			if code == 0 {
-				fmt.Printf("%s\n", msg.Params[1])
+				h.log.Printf("%s\n", msg.Params[1])
 			} else {
-				return NewStatus(msg)
+				return nil, NewStatus(msg)
 			}
 
 		case "QUI":
@@ -239,20 +218,20 @@ func (h *Hub) Open(pid *Identifier) (err error) {
 					reason = field[2:]
 				}
 			}
-			return Error(fmt.Sprintf("kicked by hub: \"%s\"", NewParameterValue(reason)))
+			return nil, Error(fmt.Sprintf("kicked by hub: \"%s\"", NewParameterValue(reason)))
 
 		case "MSG":
-			fmt.Printf("<hub> %s\n", NewParameterValue(msg.Params[0]))
+			h.log.Println("<hub> %s\n", NewParameterValue(msg.Params[0]))
 
 		default:
 			s := "unknown message recieved before INF list : " + msg.Cmd
 			for _, word := range msg.Params {
 				s = s + " " + word
 			}
-			return Error(s)
+			return nil, Error(s)
 		}
 	}
-	return nil
+	return h, nil
 }
 
 func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
@@ -326,10 +305,10 @@ func (h *Hub) runLoop() {
 			case "MSG":
 				switch len(msg.Params) {
 				case 1:
-					fmt.Printf("<hub> %s\n", NewParameterValue(msg.Params[0]))
+					h.log.Printf("<hub> %s\n", NewParameterValue(msg.Params[0]))
 				case 2:
 					p := h.peers[msg.Params[0]]
-					fmt.Printf("<%s> %s\n", p.Nick, NewParameterValue(msg.Params[1]))
+					h.log.Printf("<%s> %s\n", p.Nick, NewParameterValue(msg.Params[1]))
 				}
 
 			case "SCH":
@@ -338,31 +317,32 @@ func (h *Hub) runLoop() {
 
 			case "RES":
 				if h.sid.String() != msg.Params[1] {
-					panic("the second SID in a DRES message did not match our own")
+					h.log.Println("the second SID in a DRES message did not match our own")
+					continue
 				}
 				result := new(SearchResult)
 				result.peer = h.peers[msg.Params[0]]
 
 				var results chan *SearchResult
-				ok := true
+				ok := false
 				for _, param := range msg.Params[2:] {
 					switch param[:2] {
 					case "FN":
-						result.filename = param[2:]
+						result.FullName = param[2:]
+
 					case "SI":
 						n, err := fmt.Sscan(param[2:], &result.size)
 						if err != nil || n != 1 {
-							fmt.Println("error parsing RES SI:", err)
-							ok = false
-
+							h.log.Fatalln("error parsing RES SI:", err)
 						}
+
 					case "SL":
 						n, err := fmt.Sscan(param[2:], &result.peer.Slots)
 						if err != nil || n != 1 {
-							fmt.Println("error parsing RES SL:", err)
-							ok = false
+							h.log.Fatalln("error parsing RES SL:", err)
 						}
-					case "TR":
+
+					case "TO":
 						results, ok = h.searchResultChans[param[2:]]
 					}
 				}
@@ -372,12 +352,12 @@ func (h *Hub) runLoop() {
 
 			case "QUI":
 				sid := msg.Params[0]
-				fmt.Println("-", h.peers[sid].Nick, "has quit -")
+				h.log.Println("-", h.peers[sid].Nick, "has quit -")
 				delete(h.peers, sid)
 
 			case "STA":
 				// TODO handle STA better
-				fmt.Println(msg)
+				h.log.Println(msg)
 				/*
 					var code uint8
 					_, err := fmt.Sscan(msg.Params[0], &code)
@@ -394,7 +374,7 @@ func (h *Hub) runLoop() {
 					var port uint16
 					_, err := fmt.Sscanf(msg.Params[3], "%d", &port)
 					if err != nil {
-						fmt.Println("Did not receieve port in CTM message :", err)
+						log.Fatalln("Did not receieve port in CTM message :", err)
 					} else {
 						c <- port
 					}
@@ -403,13 +383,13 @@ func (h *Hub) runLoop() {
 				}
 
 			default:
-				fmt.Println("unhandled message type ", msg.Cmd)
-				fmt.Println(msg.Params)
+				h.log.Println("unhandled message: ", msg.Cmd, msg.Params)
 			}
 
 		case r := <-h.searchRequestChan:
-			h.searchResultChans[r.tth] = r.results
-			h.conn.WriteLine("BSCH %s TR%s", h.sid, r.tth)
+			h.searchResultChans[r.token] = r.results
+			h.log.Printf("BSCH %s TO%s %s TY1", h.sid, r.token, r.Terms)
+			h.conn.WriteLine("BSCH %s TO%s %s TY1", h.sid, r.token, r.Terms)
 		}
 	}
 }
@@ -450,11 +430,7 @@ func (h *Hub) ReverseConnectToMe(p *Peer, token string) chan uint16 {
 	return c
 }
 
-func (h *Hub) SearchByTTR(tth string, results chan *SearchResult) {
-	r := &SearchRequest{
-		tth:     tth,
-		results: results,
-	}
+func (h *Hub) Search(r *SearchRequest) {
 	h.searchRequestChan <- r
 }
 

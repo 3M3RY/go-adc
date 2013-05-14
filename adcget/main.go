@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -13,67 +19,130 @@ import "code.google.com/p/go-tiger/tiger"
 var ( // Commandline switches
 	searchTTH      string
 	outputFilename string
+	start          time.Time
 )
 
 func init() {
 	flag.StringVar(&searchTTH, "tth", "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ", "search for a given Tiger tree hash")
 	flag.StringVar(&outputFilename, "o", "", "save search reseult to given file")
+	start = time.Now()
 }
 
 func main() {
+
 	flag.Parse()
 
-	hubUrl := flag.Arg(0)
-	if hubUrl == "" {
-		fmt.Println("No hub address specified, exiting.")
-		return
+	url, err := url.Parse(flag.Arg(0))
+	if err != nil {
+		fmt.Println("URL error", err)
+		os.Exit(-1)
 	}
 
-	// Generate PID
-	// A client PID should be persist between sessions and between hubs.
-	// This utility is intended to be run from scripts by non-users accounts,
-	// so storing this PID becomes difficult as you dont want someone to replicate
-	// a host system and have fetches not work because there is a PID collision 
-	// with other replicants using the same hub, thus I'll just hash the hostname
-	// for now, which is insecure as the hostname can be publicly known.
-	// 
-	// Perhaps it is best to read the PID from the file ./.adc_pid_::hostname::
-	// if it is present, otherwise hash the current hostame and system time, then
-	// write that to the afformentioned file.
+	logger := log.New(os.Stderr, "\r", 0)
+
+	switch url.Scheme {
+	case "adc":
+		adcClient(url, logger)
+	case "adcs":
+		adcClient(url, logger)
+	case "http":
+		httpClient(url)
+	case "https":
+		httpClient(url)
+	default:
+		logger.Fatalln("Unsupported or unknown url scheme:", url.Scheme)
+	}
+}
+
+func adcClient(url *url.URL, logger *log.Logger) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		fmt.Printf("error: could not generate client PID, %s\n", err)
 	}
 	hash := tiger.New()
-	fmt.Fprint(hash, hostname)
+	fmt.Fprint(hash, hostname, os.Getuid)
 	pid := adc.NewPrivateID(hash.Sum(nil))
 
-	hub, err := adc.NewHub(hubUrl)
-	if err != nil {
-		fmt.Printf("Could not connect; %s\n", err)
-		return
-	}
-	err = hub.Open(pid)
+	hub, err := adc.NewHub(pid, url, logger)
 	if err != nil {
 		fmt.Printf("Could not connect; %s\n", err)
 		return
 	}
 
+	var done chan uint64
+	var fileName string
 	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
 		if fmt.Sprint(outputFilename) == "" {
 			fmt.Println("No output file specified, exiting.")
 			return
 		}
-
 		tth, err := adc.NewTigerTreeHash(searchTTH)
 		if err != nil {
-			fmt.Println("Invalid TTH:", err)
+			logger.Fatal("Invalid TTH:", err)
 		}
 
-		dispatcher, _ := adc.NewDownloadDispatcher(tth, outputFilename)
+		dispatcher, _ := adc.NewTTHDownloadDispatcher(tth, outputFilename, logger)
 		resultChan := dispatcher.ResultChannel()
-		hub.SearchByTTR(searchTTH, resultChan)
+		done = dispatcher.FinalChannel()
+		search := adc.NewSearch(resultChan)
+		search.AddTTH(tth)
+		hub.Search(search)
+		dispatcher.Run()
+
+	} else {
+		elements := strings.Split(url.Path, "/")
+		fileName = elements[len(elements)-1]
+		if fmt.Sprint(outputFilename) == "" {
+			outputFilename = fileName
+		}
+
+		dispatcher, _ := adc.NewFilenameDownloadDispatcher(fileName, outputFilename, logger)
+		resultChan := dispatcher.ResultChannel()
+		done = dispatcher.FinalChannel()
+		search := adc.NewSearch(resultChan)
+		search.AddInclude(fileName)
+		hub.Search(search)
 		dispatcher.Run()
 	}
-	time.Sleep(1 * time.Hour)
+
+	size := <-done
+	if size == 0 {
+		os.Exit(-1)
+	} else {
+		fmt.Printf("\nDownloaded %d bytes in %s\n", size, time.Since(start))
+		os.Exit(0)
+	}
+}
+
+func httpClient(url *url.URL) {
+	var fileName string
+	if fmt.Sprint(outputFilename) == "" {
+		elements := strings.Split(url.Path, "/")
+		fileName = elements[len(elements)-1]
+		if fmt.Sprint(outputFilename) == "" {
+			outputFilename = fileName
+		}
+	}
+
+	file, err := os.Create(outputFilename)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(-1)
+	}
+
+	res, err := http.Get(url.String())
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(-1)
+	}
+	fmt.Println(res)
+
+	w := bufio.NewWriter(file)
+	size, err := io.Copy(w, res.Body)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(-1)
+	}
+	fmt.Printf("\nDownloaded %d bytes in %s\n", size, time.Since(start))
+	os.Exit(0)
 }

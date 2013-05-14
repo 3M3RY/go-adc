@@ -1,66 +1,46 @@
 package adc
 
-import "sync"
+import (
+	"crypto/rand"
+	"fmt"
+)
 
 type Search struct {
 	info map[string]string
 }
 
+type SearchResult struct {
+	peer     *Peer
+	FullName string
+	size     uint64
+}
+
 type SearchRequest struct {
-	tth     string
+	Terms string
+	token string
 	results chan *SearchResult
 }
 
-type SearchResult struct {
-	peer     *Peer
-	filename string
-	size     uint64
-	index    int
+func NewSearch(c chan *SearchResult) *SearchRequest {
+	b := make([]byte, 4)
+	_, err := rand.Read(b)
+	if err != nil {
+		panic(err)
+	}
+	return &SearchRequest{
+		token: fmt.Sprintf("%x", b),
+		results: c,
+	}
 }
 
-// A peerQueue implements heap.Interface and 
-// queues Peer objects by slots.
-type SearchResultQueue struct {
-	results []*SearchResult
-	mu      sync.Mutex
+func (s *SearchRequest) AddTTH(tth *TigerTreeHash) {
+	s.Terms = s.Terms + " TR" + tth.String()
 }
 
-func newSearchResultQueue() *SearchResultQueue {
-	q := new(SearchResultQueue)
-	q.results = make([]*SearchResult, 0)
-	return q
+func (s *SearchRequest) AddInclude(a string) {
+	s.Terms = s.Terms + " AN" + a
 }
 
-func (q SearchResultQueue) Len() int { return len(q.results) }
-
-func (q SearchResultQueue) Less(i, j int) bool { 
-	return q.results[i].peer.Slots > q.results[j].peer.Slots 
-}
-
-func (q SearchResultQueue) Swap(i, j int) {
-	q.mu.Lock()
-	q.results[i], q.results[j] = q.results[j], q.results[i]
-	q.results[i].index = i
-	q.results[j].index = j
-	q.mu.Unlock()
-}
-
-func (q *SearchResultQueue) Push(x interface{}) {
-	q.mu.Lock()
-	n := len(q.results)
-	q.results = q.results[0 : n+1]
-	r := x.(*SearchResult)
-	r.index = n
-	q.results[n] = r
-	q.mu.Unlock()
-}
-
-func (q *SearchResultQueue) Pop() interface{} {
-	q.mu.Lock()
-	n := len(q.results)
-	r := q.results[n]
-	q.results = q.results[:n-1]
-	r.index = -1
-	q.mu.Unlock()
-	return r
+func (s *SearchRequest) AddExclude(a string) {
+	s.Terms = s.Terms + " NO" + a
 }
