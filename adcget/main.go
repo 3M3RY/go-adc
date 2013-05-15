@@ -20,17 +20,29 @@ var ( // Commandline switches
 	searchTTH      string
 	outputFilename string
 	start          time.Time
+	searchTimeout  time.Duration
 )
 
 func init() {
 	flag.StringVar(&searchTTH, "tth", "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ", "search for a given Tiger tree hash")
 	flag.StringVar(&outputFilename, "o", "", "save search reseult to given file")
+	flag.DurationVar(&searchTimeout, "t", time.Duration(8)*time.Second, "ADC search timeout")
 	start = time.Now()
 }
 
 func main() {
-
 	flag.Parse()
+	if len(os.Args) == 1 {
+		fmt.Println(os.Args[0], "is a utility for downloading files from ADC hubs")
+		fmt.Println("as well as traditional http and https services.")
+		fmt.Println("It may be used as the Portage fetch command by adding the")
+		fmt.Println("following to make.conf:")
+		fmt.Println("FETCHCOMMAND=\"adcget -o \"\\${DISTDIR}/\\${FILE}\" \"\\${URI}\"")
+		fmt.Println("\nUsage:", os.Args[0], "[OPTIONS] URL")
+		fmt.Println("Options:")
+		flag.PrintDefaults()
+		os.Exit(-1)
+	}
 
 	url, err := url.Parse(flag.Arg(0))
 	if err != nil {
@@ -55,6 +67,8 @@ func main() {
 }
 
 func adcClient(url *url.URL, logger *log.Logger) {
+
+
 	hostname, err := os.Hostname()
 	if err != nil {
 		fmt.Printf("error: could not generate client PID, %s\n", err)
@@ -87,7 +101,7 @@ func adcClient(url *url.URL, logger *log.Logger) {
 		search := adc.NewSearch(resultChan)
 		search.AddTTH(tth)
 		hub.Search(search)
-		dispatcher.Run()
+		dispatcher.Run(searchTimeout)
 
 	} else {
 		elements := strings.Split(url.Path, "/")
@@ -102,11 +116,12 @@ func adcClient(url *url.URL, logger *log.Logger) {
 		search := adc.NewSearch(resultChan)
 		search.AddInclude(fileName)
 		hub.Search(search)
-		dispatcher.Run()
+		dispatcher.Run(searchTimeout)
 	}
 
 	size := <-done
 	if size == 0 {
+		fmt.Println("failed to find", outputFilename)
 		os.Exit(-1)
 	} else {
 		fmt.Printf("\nDownloaded %d bytes in %s\n", size, time.Since(start))
@@ -147,6 +162,6 @@ func httpClient(url *url.URL) {
 		}
 	}
 	w.Flush()
-	//fmt.Printf("\nDownloaded %d bytes in %s\n", , time.Since(start))
+	//fmt.Printf("\nDownloaded %d bytes in %s\n", n, time.Since(start))
 	os.Exit(0)
 }

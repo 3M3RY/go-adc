@@ -28,7 +28,7 @@ func NewSearch(c chan *SearchResult) *SearchRequest {
 		panic(err)
 	}
 	return &SearchRequest{
-		token: fmt.Sprintf("%x", b),
+		token: fmt.Sprintf("%X", b),
 		results: c,
 	}
 }

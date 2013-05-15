@@ -14,29 +14,28 @@ type fileChunk struct {
 }
 
 type FilenameDownloadDispatcher struct {
-	searchName     string
-	resultChan     chan *SearchResult
-	finalChan      chan uint64
-	filename       string
-	file           *os.File
-	fileSeek       uint64
-	fileSize       uint64
-	chunkMu        sync.Mutex
-	log            *log.Logger
+	searchName string
+	resultChan chan *SearchResult
+	finalChan  chan uint64
+	filename   string
+	file       *os.File
+	fileSeek   uint64
+	fileSize   uint64
+	chunkMu    sync.Mutex
+	log        *log.Logger
 }
 
 func NewFilenameDownloadDispatcher(searchName, filename string, logger *log.Logger) (*FilenameDownloadDispatcher, error) {
 	d := &FilenameDownloadDispatcher{
 		searchName: searchName,
 		resultChan: make(chan *SearchResult, 32), // buffered to keep from blocking at the hub
-		finalChan:  make(chan uint64),
+		finalChan:  make(chan uint64, 1),
 		filename:   filename,
 		log:        logger,
 	}
 	d.chunkMu.Lock()
 	return d, nil
 }
-
 
 func (d *FilenameDownloadDispatcher) ResultChannel() chan *SearchResult {
 	return d.resultChan
@@ -46,16 +45,18 @@ func (d *FilenameDownloadDispatcher) FinalChannel() chan uint64 {
 	return d.finalChan
 }
 
-func (d *FilenameDownloadDispatcher) Run() {
-	fmt.Println("got here")
+func (d *FilenameDownloadDispatcher) Run(timeout time.Duration) {
+	stop := time.After(timeout)
+
 	var result *SearchResult
-
-	// I should check the file sizes on results coming in
-
-	result = <- d.resultChan
-	fmt.Println("got here")
-	d.fileSize = result.size
-	go nameDownloadWorker(d, result)
+	select {
+	case <-stop:
+		d.finalChan <- 0
+		return
+	case result = <-d.resultChan:
+		d.fileSize = result.size
+		go nameDownloadWorker(d, result)
+	}
 
 	go func() {
 		for result := range d.resultChan {
@@ -171,22 +172,21 @@ func nameDownloadWorker(d *FilenameDownloadDispatcher, r *SearchResult) {
 	}
 }
 
-
 type TTHDownloadDispatcher struct {
-	tth            *TigerTreeHash
-	resultChan     chan *SearchResult
-	finalChan      chan uint64
-	filename       string
-	file           *os.File
-	fileSeek       uint64
-	fileSize       uint64
-	chunkMu        sync.Mutex
-	log            *log.Logger
+	tth        *TigerTreeHash
+	resultChan chan *SearchResult
+	finalChan  chan uint64
+	filename   string
+	file       *os.File
+	fileSeek   uint64
+	fileSize   uint64
+	chunkMu    sync.Mutex
+	log        *log.Logger
 }
 
 func NewTTHDownloadDispatcher(tth *TigerTreeHash, fileName string, logger *log.Logger) (*TTHDownloadDispatcher, error) {
 	d := &TTHDownloadDispatcher{
-		tth:        tth ,
+		tth:        tth,
 		resultChan: make(chan *SearchResult, 32), // buffered to keep from blocking at the hub
 		finalChan:  make(chan uint64),
 		filename:   fileName,
@@ -204,29 +204,34 @@ func (d *TTHDownloadDispatcher) FinalChannel() chan uint64 {
 	return d.finalChan
 }
 
-func (d *TTHDownloadDispatcher) Run() {
+func (d *TTHDownloadDispatcher) Run(timeout time.Duration) {
+	stop := time.After(timeout)
+
 	var result *SearchResult
+	for d.fileSize == 0 {
+		select {
+		case <-stop:
+			d.finalChan <- 0
+			return
 
-	// I should check the file sizes on results coming in
+		case result = <-d.resultChan:
+			peer := result.peer
+			sessionId := peer.NextSessionId()
+			err := peer.StartSession(sessionId)
+			if err != nil {
+				fmt.Printf("Error: could not connect to %s for hash tree:\n", peer.Nick, err)
+				continue
+			}
 
-	for result = range d.resultChan {
-		peer := result.peer
-		sessionId := peer.NextSessionId()
-		err := peer.StartSession(sessionId)
-		if err != nil {
-			fmt.Printf("Error: could not connect to %s for hash tree:\n", peer.Nick, err)
-			continue
-		}
-
-		_, err = peer.getTigerTreeHashLeaves(d.tth)
-		peer.EndSession(sessionId)
-		if err != nil {
-			fmt.Printf("Error: could not get leaves from %v: %v\n", peer.Nick, err)
-			continue
-		} else {
-			d.fileSize = result.size
-			go tthDownloadWorker(d, result)
-			break
+			_, err = peer.getTigerTreeHashLeaves(d.tth)
+			peer.EndSession(sessionId)
+			if err != nil {
+				fmt.Printf("Error: could not get leaves from %v: %v\n", peer.Nick, err)
+				continue
+			} else {
+				d.fileSize = result.size
+				go tthDownloadWorker(d, result)
+			}
 		}
 	}
 

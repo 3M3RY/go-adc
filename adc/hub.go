@@ -348,6 +348,8 @@ func (h *Hub) runLoop() {
 				}
 				if ok {
 					results <- result
+				} else {
+					h.log.Println("unable to handle RES:", msg.Params)
 				}
 
 			case "QUI":
@@ -388,7 +390,6 @@ func (h *Hub) runLoop() {
 
 		case r := <-h.searchRequestChan:
 			h.searchResultChans[r.token] = r.results
-			h.log.Printf("BSCH %s TO%s %s TY1", h.sid, r.token, r.Terms)
 			h.conn.WriteLine("BSCH %s TO%s %s TY1", h.sid, r.token, r.Terms)
 		}
 	}
