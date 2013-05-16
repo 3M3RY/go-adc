@@ -13,11 +13,17 @@ type fileChunk struct {
 	size  uint64
 }
 
-type FilenameDownloadDispatcher struct {
-	searchName string
+type DownloadConfig struct {
+	OutputFilename string
+	SearchFilename string
+	Hash           *TigerTreeHash
+	Verify         bool
+}
+
+type DownloadDispatcher struct {
+	config     *DownloadConfig
 	resultChan chan *SearchResult
 	finalChan  chan uint64
-	filename   string
 	file       *os.File
 	fileSeek   uint64
 	fileSize   uint64
@@ -25,54 +31,97 @@ type FilenameDownloadDispatcher struct {
 	log        *log.Logger
 }
 
-func NewFilenameDownloadDispatcher(searchName, filename string, logger *log.Logger) (*FilenameDownloadDispatcher, error) {
-	d := &FilenameDownloadDispatcher{
-		searchName: searchName,
+func NewDownloadDispatcher(config *DownloadConfig, logger *log.Logger) (*DownloadDispatcher, error) {
+	d := &DownloadDispatcher{
+		config: config,
 		resultChan: make(chan *SearchResult, 32), // buffered to keep from blocking at the hub
 		finalChan:  make(chan uint64, 1),
-		filename:   filename,
 		log:        logger,
 	}
 	d.chunkMu.Lock()
 	return d, nil
 }
 
-func (d *FilenameDownloadDispatcher) ResultChannel() chan *SearchResult {
+func (d DownloadDispatcher) ResultChannel() chan *SearchResult {
 	return d.resultChan
 }
 
-func (d *FilenameDownloadDispatcher) FinalChannel() chan uint64 {
+func (d *DownloadDispatcher) FinalChannel() chan uint64 {
 	return d.finalChan
 }
 
-func (d *FilenameDownloadDispatcher) Run(timeout time.Duration) {
+func (d *DownloadDispatcher) Run(timeout time.Duration) {
 	stop := time.After(timeout)
 
 	var result *SearchResult
-	select {
-	case <-stop:
-		d.finalChan <- 0
-		return
-	case result = <-d.resultChan:
-		d.fileSize = result.size
-		go nameDownloadWorker(d, result)
+	if d.config.Hash == nil {
+		select {
+		case <-stop:
+			d.finalChan <- 0
+			return
+		case result = <-d.resultChan:
+			d.fileSize = result.size
+			go downloadWorker(d, result)
+		}
+
+		go func() {
+			for result := range d.resultChan {
+				go downloadWorker(d, result)
+			}
+		}()
+		
+	} else {
+		for d.fileSize == 0 {
+			select {
+			case <-stop:
+				d.finalChan <- 0
+				return
+				
+			case result = <-d.resultChan:
+				peer := result.peer
+				sessionId := peer.NextSessionId()
+				err := peer.StartSession(sessionId)
+				if err != nil {
+					fmt.Printf("Error: could not connect to %v for hash tree:\n", peer.Nick, err)
+					continue
+				}
+				
+				_, err = peer.getTigerTreeHashLeaves(d.config.Hash)
+				peer.EndSession(sessionId)
+				if err != nil {
+					fmt.Printf("Error: could not get leaves from %v: %v\n", peer.Nick, err)
+					continue
+				}
+				d.fileSize = result.size
+				go downloadWorker(d, result)
+			}
+		}
+		
+		go func() {
+			for result := range d.resultChan {
+				if result.size != d.fileSize {
+					_, err := result.peer.getTigerTreeHashLeaves(d.config.Hash)
+					if err != nil {
+						fmt.Printf("Error: could not get leaves from %v: %v\n", result.peer.Nick, err)
+						continue
+					} else {
+						panic("two hosts presented valid hash tree leaves but different file sizes")
+					}
+				}
+				go downloadWorker(d, result)
+			}
+		}()
 	}
 
-	go func() {
-		for result := range d.resultChan {
-			go nameDownloadWorker(d, result)
-		}
-	}()
-
 	var err error
-	d.file, err = os.Create(d.filename)
+	d.file, err = os.Create(d.config.OutputFilename)
 	if err != nil {
 		d.log.Fatalln(err)
 	}
 	d.chunkMu.Unlock()
 }
 
-func (d *FilenameDownloadDispatcher) getChunk(size uint64) *fileChunk {
+func (d *DownloadDispatcher) getChunk(size uint64) *fileChunk {
 	d.chunkMu.Lock()
 	defer d.chunkMu.Unlock()
 	fmt.Print("\r", d.fileSeek, "/", d.fileSize)
@@ -95,7 +144,7 @@ func (d *FilenameDownloadDispatcher) getChunk(size uint64) *fileChunk {
 	return c
 }
 
-func nameDownloadWorker(d *FilenameDownloadDispatcher, r *SearchResult) {
+func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 	p := r.peer
 	requestSize := uint64(65536)
 	for {
@@ -172,118 +221,9 @@ func nameDownloadWorker(d *FilenameDownloadDispatcher, r *SearchResult) {
 	}
 }
 
-type TTHDownloadDispatcher struct {
-	tth        *TigerTreeHash
-	resultChan chan *SearchResult
-	finalChan  chan uint64
-	filename   string
-	file       *os.File
-	fileSeek   uint64
-	fileSize   uint64
-	chunkMu    sync.Mutex
-	log        *log.Logger
-}
-
-func NewTTHDownloadDispatcher(tth *TigerTreeHash, fileName string, logger *log.Logger) (*TTHDownloadDispatcher, error) {
-	d := &TTHDownloadDispatcher{
-		tth:        tth,
-		resultChan: make(chan *SearchResult, 32), // buffered to keep from blocking at the hub
-		finalChan:  make(chan uint64),
-		filename:   fileName,
-		log:        logger,
-	}
-	d.chunkMu.Lock()
-	return d, nil
-}
-
-func (d *TTHDownloadDispatcher) ResultChannel() chan *SearchResult {
-	return d.resultChan
-}
-
-func (d *TTHDownloadDispatcher) FinalChannel() chan uint64 {
-	return d.finalChan
-}
-
-func (d *TTHDownloadDispatcher) Run(timeout time.Duration) {
-	stop := time.After(timeout)
-
-	var result *SearchResult
-	for d.fileSize == 0 {
-		select {
-		case <-stop:
-			d.finalChan <- 0
-			return
-
-		case result = <-d.resultChan:
-			peer := result.peer
-			sessionId := peer.NextSessionId()
-			err := peer.StartSession(sessionId)
-			if err != nil {
-				fmt.Printf("Error: could not connect to %s for hash tree:\n", peer.Nick, err)
-				continue
-			}
-
-			_, err = peer.getTigerTreeHashLeaves(d.tth)
-			peer.EndSession(sessionId)
-			if err != nil {
-				fmt.Printf("Error: could not get leaves from %v: %v\n", peer.Nick, err)
-				continue
-			} else {
-				d.fileSize = result.size
-				go tthDownloadWorker(d, result)
-			}
-		}
-	}
-
-	go func() {
-		for result := range d.resultChan {
-			if result.size != d.fileSize {
-				_, err := result.peer.getTigerTreeHashLeaves(d.tth)
-				if err != nil {
-					fmt.Printf("Error: could not get leaves from %v: %v\n", result.peer.Nick, err)
-					continue
-				} else {
-					panic("two hosts presented valid hash tree leaves but different file sizes")
-				}
-			}
-			go tthDownloadWorker(d, result)
-		}
-	}()
-
-	var err error
-	d.file, err = os.Create(d.filename)
-	if err != nil {
-		d.log.Fatalln(err)
-	}
-	d.chunkMu.Unlock()
-}
-
-func (d *TTHDownloadDispatcher) getChunk(size uint64) *fileChunk {
-	d.chunkMu.Lock()
-	defer d.chunkMu.Unlock()
-	fmt.Print("\r", d.fileSeek, "/", d.fileSize)
-	if d.fileSeek == d.fileSize {
-		d.finalChan <- d.fileSize
-		return nil
-	}
-
-	c := new(fileChunk)
-	c.start = d.fileSeek
-
-	newSeek := d.fileSeek + size
-	if newSeek > d.fileSize {
-		c.size = d.fileSize - d.fileSeek
-		d.fileSeek = d.fileSize
-	} else {
-		c.size = size
-		d.fileSeek = newSeek
-	}
-	return c
-}
-
-func tthDownloadWorker(d *TTHDownloadDispatcher, r *SearchResult) {
+func tthDownloadWorker(d *DownloadDispatcher, r *SearchResult) {
 	p := r.peer
-	identifier := "TTH/" + d.tth.String()
+	identifier := "TTH/" + d.config.Hash.String()
 	requestSize := uint64(65536)
 	for {
 		chunk := d.getChunk(requestSize)

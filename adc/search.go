@@ -21,7 +21,7 @@ type SearchRequest struct {
 	results chan *SearchResult
 }
 
-func NewSearch(c chan *SearchResult) *SearchRequest {
+func NewSearch() *SearchRequest {
 	b := make([]byte, 4)
 	_, err := rand.Read(b)
 	if err != nil {
@@ -29,7 +29,6 @@ func NewSearch(c chan *SearchResult) *SearchRequest {
 	}
 	return &SearchRequest{
 		token: fmt.Sprintf("%X", b),
-		results: c,
 	}
 }
 
@@ -43,4 +42,8 @@ func (s *SearchRequest) AddInclude(a string) {
 
 func (s *SearchRequest) AddExclude(a string) {
 	s.Terms = s.Terms + " NO" + a
+}
+
+func (s *SearchRequest) SetResultChannel(c chan *SearchResult) {
+	s.results = c
 }

@@ -25,19 +25,17 @@ var ( // Commandline switches
 
 func init() {
 	flag.StringVar(&searchTTH, "tth", "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ", "search for a given Tiger tree hash")
-	flag.StringVar(&outputFilename, "o", "", "save search reseult to given file")
-	flag.DurationVar(&searchTimeout, "t", time.Duration(8)*time.Second, "ADC search timeout")
+	flag.StringVar(&outputFilename, "output", "", "output download to given file")
+	flag.DurationVar(&searchTimeout, "timeout", time.Duration(8)*time.Second, "ADC search timeout")
 	start = time.Now()
 }
 
 func main() {
 	flag.Parse()
 	if len(os.Args) == 1 {
-		fmt.Println(os.Args[0], "is a utility for downloading files from ADC hubs")
-		fmt.Println("as well as traditional http and https services.")
-		fmt.Println("It may be used as the Portage fetch command by adding the")
-		fmt.Println("following to make.conf:")
-		fmt.Println("FETCHCOMMAND=\"adcget -o \"\\${DISTDIR}/\\${FILE}\" \"\\${URI}\"")
+		fmt.Println(os.Args[0], "is a utility for downloading files from ADC hubs as well as traditional http and https services.")		
+		fmt.Println("It may be used as the Portage fetch command by adding the following to make.conf:")
+		fmt.Println("FETCHCOMMAND=\"adcget -output \\\"\\${DISTDIR}/\\${FILE}\\\" \\\"\\${URI}\\\"\"")
 		fmt.Println("\nUsage:", os.Args[0], "[OPTIONS] URL")
 		fmt.Println("Options:")
 		flag.PrintDefaults()
@@ -84,7 +82,9 @@ func adcClient(url *url.URL, logger *log.Logger) {
 	}
 
 	var done chan uint64
-	var fileName string
+	search := adc.NewSearch()
+	var config *adc.DownloadConfig
+	
 	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
 		if fmt.Sprint(outputFilename) == "" {
 			fmt.Println("No output file specified, exiting.")
@@ -94,30 +94,37 @@ func adcClient(url *url.URL, logger *log.Logger) {
 		if err != nil {
 			logger.Fatal("Invalid TTH:", err)
 		}
-
-		dispatcher, _ := adc.NewTTHDownloadDispatcher(tth, outputFilename, logger)
-		resultChan := dispatcher.ResultChannel()
-		done = dispatcher.FinalChannel()
-		search := adc.NewSearch(resultChan)
 		search.AddTTH(tth)
-		hub.Search(search)
-		dispatcher.Run(searchTimeout)
+
+		config = &adc.DownloadConfig{
+			OutputFilename: outputFilename,
+			Hash: tth,
+		}
 
 	} else {
 		elements := strings.Split(url.Path, "/")
-		fileName = elements[len(elements)-1]
+		searchFilename := elements[len(elements)-1]
+		search.AddInclude(searchFilename)
+
 		if fmt.Sprint(outputFilename) == "" {
-			outputFilename = fileName
+			config = &adc.DownloadConfig{
+				OutputFilename: searchFilename,
+				SearchFilename: searchFilename,
+			}
+		} else {
+			config = &adc.DownloadConfig{
+				OutputFilename: outputFilename,
+				SearchFilename: searchFilename,
+				}
+			}
 		}
 
-		dispatcher, _ := adc.NewFilenameDownloadDispatcher(fileName, outputFilename, logger)
-		resultChan := dispatcher.ResultChannel()
-		done = dispatcher.FinalChannel()
-		search := adc.NewSearch(resultChan)
-		search.AddInclude(fileName)
-		hub.Search(search)
-		dispatcher.Run(searchTimeout)
-	}
+	dispatcher, _ := adc.NewDownloadDispatcher(config, logger)
+	search.SetResultChannel(dispatcher.ResultChannel())
+	done = dispatcher.FinalChannel()
+
+	hub.Search(search)
+	dispatcher.Run(searchTimeout)
 
 	size := <-done
 	if size == 0 {
