@@ -1,6 +1,7 @@
 package adc
 
 import (
+	"compress/zlib"
 	"fmt"
 	"log"
 	"os"
@@ -18,6 +19,7 @@ type DownloadConfig struct {
 	SearchFilename string
 	Hash           *TigerTreeHash
 	Verify         bool
+	Compress       bool
 }
 
 type DownloadDispatcher struct {
@@ -33,7 +35,7 @@ type DownloadDispatcher struct {
 
 func NewDownloadDispatcher(config *DownloadConfig, logger *log.Logger) (*DownloadDispatcher, error) {
 	d := &DownloadDispatcher{
-		config: config,
+		config:     config,
 		resultChan: make(chan *SearchResult, 32), // buffered to keep from blocking at the hub
 		finalChan:  make(chan uint64, 1),
 		log:        logger,
@@ -69,14 +71,14 @@ func (d *DownloadDispatcher) Run(timeout time.Duration) {
 				go downloadWorker(d, result)
 			}
 		}()
-		
+
 	} else {
 		for d.fileSize == 0 {
 			select {
 			case <-stop:
 				d.finalChan <- 0
 				return
-				
+
 			case result = <-d.resultChan:
 				peer := result.peer
 				sessionId := peer.NextSessionId()
@@ -85,7 +87,7 @@ func (d *DownloadDispatcher) Run(timeout time.Duration) {
 					fmt.Printf("Error: could not connect to %v for hash tree:\n", peer.Nick, err)
 					continue
 				}
-				
+
 				_, err = peer.getTigerTreeHashLeaves(d.config.Hash)
 				peer.EndSession(sessionId)
 				if err != nil {
@@ -96,7 +98,7 @@ func (d *DownloadDispatcher) Run(timeout time.Duration) {
 				go downloadWorker(d, result)
 			}
 		}
-		
+
 		go func() {
 			for result := range d.resultChan {
 				if result.size != d.fileSize {
@@ -159,126 +161,100 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			d.log.Println("could not open session with %v: %s", p.Nick, err)
 			return
 		}
-		err = p.conn.WriteLine("CGET file %s %d %d", r.FullName, chunk.start, chunk.size)
+
+		var f string
+		if p.features["ZLIG"] && d.config.Compress {
+			f = "CGET file %s %d %d ZL1"
+		} else {
+			f = "CGET file %s %d %d"
+		}
+
+		err = p.conn.WriteLine(f, r.FullName, chunk.start, chunk.size)
+
 		if err != nil {
+			p.EndSession(sessionId)
 			return
 		}
 
 		msg, err := p.conn.ReadMessage()
 		if err != nil {
+			p.EndSession(sessionId)
 			return
 		}
 		var start uint64
 		var size uint64
 
+		var zl bool
 		switch msg.Cmd {
 		case "STA":
 			d.log.Println(msg)
+			p.EndSession(sessionId)
 			return
 		case "SND":
 			if msg.Params[0] != "file" || msg.Params[1] != r.FullName {
 				p.conn.WriteLine("CSTA 140 invalid\\sarguments.")
+				p.EndSession(sessionId)
 				return
 			}
 			fmt.Sscan(msg.Params[2], &start)
 			fmt.Sscan(msg.Params[3], &size)
 			if start < chunk.start || size > chunk.size {
 				p.conn.WriteLine("CSTA 140 invalid\\sfile\\srange")
+				p.EndSession(sessionId)
 				return
 			}
+			switch len(msg.Params) {
+			case 4:
+			case 5:
+				switch msg.Params[4] {
+				case "ZL0":
+				case "ZL1":
+					zl = true
+				default:
+					p.conn.WriteLine("CSTA 140 unknown\\sflags")
+					p.EndSession(sessionId)
+					return
+				}
+			default:
+				p.conn.WriteLine("CSTA 140 unknown\\sflags")
+				p.EndSession(sessionId)
+				return
 
+			}
 		default:
+			p.EndSession(sessionId)
 			return
 		}
 		buf := make([]byte, size)
 		var pos int
 
 		startOfTransfer := time.Now()
-		for pos < int(size) {
-			n, err := p.conn.R.Read(buf[pos:])
+		if zl {
+			r, err := zlib.NewReader(p.conn.R)
 			if err != nil {
-				p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
-				return
-			}
-			pos += n
-		}
-		p.EndSession(sessionId)
-
-		n, err := d.file.WriteAt(buf, int64(start))
-		size = uint64(n)
-		if err != nil {
-			return
-		}
-
-		// a logarithmic increase seems like a good idea,
-		// we want peers on a LAN to blow away the others
-		duration := time.Since(startOfTransfer)
-		if duration < time.Minute {
-			requestSize *= 2
-		} else if duration > time.Minute*4 {
-			requestSize /= 2
-		}
-	}
-}
-
-func tthDownloadWorker(d *DownloadDispatcher, r *SearchResult) {
-	p := r.peer
-	identifier := "TTH/" + d.config.Hash.String()
-	requestSize := uint64(65536)
-	for {
-		chunk := d.getChunk(requestSize)
-		if chunk == nil {
-			break
-		}
-
-		sessionId := p.NextSessionId()
-		err := p.StartSession(sessionId)
-		if err != nil {
-			d.log.Println("could not open session with %v: %s", p.Nick, err)
-			return
-		}
-		err = p.conn.WriteLine("CGET file %s %d %d", identifier, chunk.start, chunk.size)
-		if err != nil {
-			return
-		}
-
-		msg, err := p.conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		var start uint64
-		var size uint64
-
-		switch msg.Cmd {
-		case "STA":
-			d.log.Println(msg)
-			return
-		case "SND":
-			if msg.Params[0] != "file" || msg.Params[1] != identifier {
-				p.conn.WriteLine("CSTA 140 invalid\\sarguments.")
-				return
-			}
-			fmt.Sscan(msg.Params[2], &start)
-			fmt.Sscan(msg.Params[3], &size)
-			if start < chunk.start || size > chunk.size {
-				p.conn.WriteLine("CSTA 140 invalid\\sfile\\srange")
+				p.EndSession(sessionId)
 				return
 			}
 
-		default:
-			return
-		}
-		buf := make([]byte, size)
-		var pos int
-
-		startOfTransfer := time.Now()
-		for pos < int(size) {
-			n, err := p.conn.R.Read(buf[pos:])
-			if err != nil {
-				p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
-				return
+			for pos < int(size) {
+				n, err := r.Read(buf[pos:])
+				if err != nil {
+					p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
+					p.EndSession(sessionId)
+					return
+				}
+				pos += n
 			}
-			pos += n
+		} else {
+			for pos < int(size) {
+				n, err := p.conn.R.Read(buf[pos:])
+				if err != nil {
+					p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
+					p.EndSession(sessionId)
+					return
+				}
+				pos += n
+			}
 		}
 		p.EndSession(sessionId)
 

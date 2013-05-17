@@ -63,10 +63,10 @@ func (p *Peer) StartSession(id uint) (err error) {
 	p.sessionWait[id] = c
 	p.sessionMu.Unlock()
 	<-c
-	
+
 	if p.conn == nil {
-		err =  p.connect()
-			return
+		err = p.connect()
+		return
 	}
 	return
 }
@@ -123,7 +123,7 @@ func (p *Peer) connect() (err error) {
 	}
 	p.conn = NewConn(c)
 
-	p.conn.WriteLine("CSUP ADBASE ADTIGR")
+	p.conn.WriteLine("CSUP ADBASE ADTIGR ADZLIG")
 	msg, err := p.conn.ReadMessage()
 	if err != nil {
 		p.hub.conn.WriteLine("ISTA 142 TO%s PRADC/1.0", token)

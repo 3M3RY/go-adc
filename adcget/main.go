@@ -21,12 +21,15 @@ var ( // Commandline switches
 	outputFilename string
 	start          time.Time
 	searchTimeout  time.Duration
+	compress       bool
 )
 
 func init() {
 	flag.StringVar(&searchTTH, "tth", "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ", "search for a given Tiger tree hash")
 	flag.StringVar(&outputFilename, "output", "", "output download to given file")
 	flag.DurationVar(&searchTimeout, "timeout", time.Duration(8)*time.Second, "ADC search timeout")
+	// NOT TESTED WITH A CLIENT THAT COMPLIES WITH COMPRESSION REQUEST
+	flag.BoolVar(&compress, "compress", false, "EXPERIMENTAL: compress data transfer")
 	start = time.Now()
 }
 
@@ -119,6 +122,7 @@ func adcClient(url *url.URL, logger *log.Logger) {
 			}
 		}
 
+	config.Compress = compress
 	dispatcher, _ := adc.NewDownloadDispatcher(config, logger)
 	search.SetResultChannel(dispatcher.ResultChannel())
 	done = dispatcher.FinalChannel()
