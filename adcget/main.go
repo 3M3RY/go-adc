@@ -68,8 +68,6 @@ func main() {
 }
 
 func adcClient(url *url.URL, logger *log.Logger) {
-
-
 	hostname, err := os.Hostname()
 	if err != nil {
 		fmt.Printf("error: could not generate client PID, %s\n", err)

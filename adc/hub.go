@@ -25,20 +25,21 @@ const (
 )
 
 type Hub struct {
-	url                   *url.URL
-	pid                   *Identifier
-	cid                   *Identifier
-	sid                   *Identifier
-	conn                  *Conn
-	hasher                hash.Hash
-	features              map[string]bool
-	info                  map[string]*ParameterValue
-	log                   *log.Logger
-	peers                 map[string]*Peer
-	messages              chan *Message
+	url               *url.URL
+	pid               *Identifier
+	cid               *Identifier
+	sid               *Identifier
+	conn              *Conn
+	hasher            hash.Hash
+	features          map[string]bool
+	info              map[string]*ParameterValue
+	log               *log.Logger
+	peers             map[string]*Peer
+	messages          chan *Message
 	searchRequestChan chan *SearchRequest
 	searchResultChans map[string](chan *SearchResult)
-	rcmChans              map[string](chan uint16)
+	rcmChans          map[string](chan uint16)
+	handlers          map[string]func(*Message)
 }
 
 type HubError struct {
@@ -63,6 +64,7 @@ func NewHub(pid *Identifier, url *url.URL, logger *log.Logger) (h *Hub, err erro
 		searchRequestChan: make(chan *SearchRequest, 32),
 		searchResultChans: make(map[string](chan *SearchResult)),
 		rcmChans:          make(map[string](chan uint16)),
+		handlers:          make(map[string]func(*Message)),
 	}
 
 	var digest hash.Hash
@@ -288,10 +290,23 @@ func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
 	return nil, nil
 }
 
+// RegisterMessageHandler registers function f with message type c.
+// For example, to add a handler for INF messsages, you would use
+// h.RegisterMessageHandler("INF", MyINFFunction)
+func (h *Hub) RegisterMessageHandler(c string, f func(*Message)) {
+	h.handlers[c] = f
+}
+
 func (h *Hub) runLoop() {
 	for {
 		select {
 		case msg := <-h.messages:
+
+			f, ok := h.handlers[msg.Cmd]
+			if ok {
+				f(msg)
+			}
+
 			switch msg.Cmd {
 			case "INF":
 				peerSid := msg.Params[0]
