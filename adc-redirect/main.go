@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 )
@@ -18,10 +19,15 @@ var (
 	target       = flag.String("target", "adc://localhost:1511", "hub to redirect clients to")
 	certFilename = flag.String("cert", "", "TLS certificate file")
 	keyFilename  = flag.String("key", "", "TLS key file")
+	logRedirects = flag.Bool("log", false, "log to STDOUT")
+	redirectLog  *log.Logger
 )
 
 func main() {
 	flag.Parse()
+	if *logRedirects {
+		redirectLog = log.New(os.Stdout, log.Prefix(), log.Flags())
+	}
 	var ln net.Listener
 	var err error
 	if *certFilename != "" && *keyFilename == "" {
@@ -35,7 +41,7 @@ func main() {
 		os.Exit(-1)
 	}
 
-	if *certFilename == "" && *keyFilename == ""{
+	if *certFilename == "" && *keyFilename == "" {
 		ln, err = net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	} else {
 		cert, err := tls.LoadX509KeyPair(*certFilename, *keyFilename)
@@ -81,6 +87,25 @@ func handleConnection(c io.ReadWriteCloser) {
 	}
 	if msg.Cmd != "INF" {
 		return
+	}
+	if *logRedirects {
+		var id string
+		var nick string
+		for _, field := range msg.Params[1:] {
+			switch field[:2] {
+			case "ID":
+				id = field[2:]
+				if nick != "" {
+					break
+				}
+			case "NI":
+				nick = field[2:]
+				if id != "" {
+					break
+				}
+			}
+		}
+		redirectLog.Println(id, nick)
 	}
 
 	conn.WriteLine("IMSG This\\shub\\shas\\smove\\sto:\\s%s", *target)
