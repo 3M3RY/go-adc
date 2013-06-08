@@ -16,15 +16,22 @@ import "code.google.com/p/go-adc/adc"
 
 var (
 	port         = flag.Int("port", 1511, "port to listen for incoming connections on")
-	target       = flag.String("target", "adc://localhost:1511", "hub to redirect clients to")
+	// message      = flag.String("message", "This hub has moved.", "message to send to clients")
+	target       = flag.String("target", "", "hub to redirect clients to")
 	certFilename = flag.String("cert", "", "TLS certificate file")
 	keyFilename  = flag.String("key", "", "TLS key file")
-	logRedirects = flag.Bool("log", false, "log to STDOUT")
+	logRedirects = flag.Bool("log", false, "log clients to Stdout")
 	redirectLog  *log.Logger
+
 )
 
 func main() {
 	flag.Parse()
+	if *target == "" {
+		fmt.Println("no redirect target specified")
+		flag.Usage()
+		os.Exit(-1)
+	}
 	if *logRedirects {
 		redirectLog = log.New(os.Stdout, log.Prefix(), log.Flags())
 	}
