@@ -1,6 +1,7 @@
 package adc
 
 import (
+	"errors"
 	"bufio"
 	"fmt"
 	"io"
@@ -107,7 +108,7 @@ func (r *Reader) ReadLine() (string, error) {
 		}
 	default:
 		// TODO make this error non-fatal
-		panic(fmt.Sprintf("bad message type %c", messageType))
+		return "", errors.New(fmt.Sprintf("bad message type %c for message %s", messageType, line))
 	}
 
 	return string(line), err
