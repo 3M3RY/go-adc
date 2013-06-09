@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -10,28 +11,112 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
+	"time"
 )
 
 import "code.google.com/p/go-adc/adc"
 
 var (
-	port         = flag.Int("port", 1511, "port to listen for incoming connections on")
-	// message      = flag.String("message", "This hub has moved.", "message to send to clients")
-	target       = flag.String("target", "", "hub to redirect clients to")
-	certFilename = flag.String("cert", "", "TLS certificate file")
-	keyFilename  = flag.String("key", "", "TLS key file")
-	logRedirects = flag.Bool("log", false, "log clients to Stdout")
-	redirectLog  *log.Logger
-
+	port            = flag.Int("port", 1511, "port to listen for incoming connections on")
+	messageFilename = flag.String("message", "", "file containing a message to send to clients")
+	target          = flag.String("target", "", "hub to redirect clients to")
+	certFilename    = flag.String("cert", "", "TLS certificate file")
+	keyFilename     = flag.String("key", "", "TLS key file")
+	logRedirects    = flag.Bool("log", false, "log clients to Stdout")
+	redirectLog     *log.Logger
+	actions         []action
 )
+
+type funcConfig struct {
+	f func(c *clientConfig, d time.Duration)
+	d time.Duration
+}
+
+type clientConfig struct {
+	nick string
+	ip   string
+	conn *adc.Conn
+}
+
+type action interface {
+	run(c *clientConfig)
+}
+
+type sleepAction struct {
+	d time.Duration
+}
+
+func (a *sleepAction) run(c *clientConfig) { time.Sleep(a.d) }
+
+type formatAction struct {
+	s string
+}
+
+func (a formatAction) run(c *clientConfig) {
+	a.s = strings.Replace(a.s, "%t", *target, -1)
+	a.s = strings.Replace(a.s, "%n", c.nick, -1)
+	a.s = strings.Replace(a.s, "%a", c.ip, -1)
+	a.s = strings.Replace(a.s, "%%", "%", -1)
+	c.conn.WriteLine("IMSG %s", a.s)
+}
+
+type msgAction struct {
+	s string
+}
+
+func (a *msgAction) run(c *clientConfig) {
+	c.conn.WriteLine("IMSG %s", a.s)
+}
+	
 
 func main() {
 	flag.Parse()
 	if *target == "" {
 		fmt.Println("no redirect target specified")
 		flag.Usage()
+		messageUsage()
 		os.Exit(-1)
 	}
+
+	if *messageFilename != "" {
+		msgFile, err := os.Open(*messageFilename)
+		if err != nil {
+			fmt.Println("Error parsing message,", err)
+			os.Exit(-1)
+		}
+		r := bufio.NewReader(msgFile)
+		for {
+			s, err := r.ReadString('\n')
+			s = strings.Replace(s, "\n", "", -1)
+			if err != nil {
+				if err == io.EOF {
+					break
+				} else {
+					fmt.Println("Error parsing message,", err)
+					os.Exit(-1)
+				}
+			}
+
+			if len(s) > 1 && s[0] == uint8('!') {
+				d, err := time.ParseDuration(s[1:])
+				if err != nil {
+					fmt.Println("Error parsing message,", err)
+					os.Exit(-1)
+				}
+				actions = append(actions, &sleepAction{d})
+				continue
+			}
+
+			s = strings.Replace(s, " ", "\\s", -1)
+			if strings.Contains(s, "%") {
+				actions = append(actions, &formatAction{s})
+				continue
+			}
+			actions = append(actions, &msgAction{s})
+		}
+	}
+
 	if *logRedirects {
 		redirectLog = log.New(os.Stdout, log.Prefix(), log.Flags())
 	}
@@ -73,8 +158,20 @@ func main() {
 	}
 }
 
-func handleConnection(c io.ReadWriteCloser) {
-	conn := adc.NewConn(c)
+func messageUsage() {
+	fmt.Println("A message should contain the message you want displayed to clients.")
+	fmt.Println("The redirector will make substitutions for the following tokens:")
+	fmt.Println("\n %t - the redirect taget")
+	fmt.Println("\t %n - Nickname of the user")
+	fmt.Println("\t %a - IP address of the user")
+	fmt.Println("\t %% - Becomes '%'")
+	fmt.Println("A line starting with '!' followed by a number and a unit suffix will")
+	fmt.Println("instruct the redirector to wait before continuing. Valid time units are")
+	fmt.Println("'ns', 'us' (or 'µs'), 'ms', 's', 'm', 'h'.")
+}
+
+func handleConnection(nc net.Conn) {
+	conn := adc.NewConn(nc)
 	defer conn.Close()
 
 	msg, err := conn.ReadMessage()
@@ -95,27 +192,28 @@ func handleConnection(c io.ReadWriteCloser) {
 	if msg.Cmd != "INF" {
 		return
 	}
-	if *logRedirects {
-		var id string
-		var nick string
-		for _, field := range msg.Params[1:] {
-			switch field[:2] {
-			case "ID":
-				id = field[2:]
-				if nick != "" {
-					break
-				}
-			case "NI":
-				nick = field[2:]
-				if id != "" {
-					break
-				}
+
+	var id string
+	c := &clientConfig{ip:nc.RemoteAddr().String(), conn:conn}
+	for _, field := range msg.Params[1:] {
+		switch field[:2] {
+		case "ID":
+			id = field[2:]
+			if c.nick != "" {
+				break
+			}
+		case "NI":
+			c.nick = field[2:]
+			if id != "" {
+				break
 			}
 		}
-		redirectLog.Println(id, nick)
 	}
-
-	conn.WriteLine("IMSG This\\shub\\shas\\smove\\sto:\\s%s", *target)
-	conn.WriteLine("IMSG You\\sare\\sbeing\\sredirected...")
+	if *logRedirects {
+		redirectLog.Println(id, c.ip, c.nick)
+	}
+	for _, a := range actions {
+		a.run(c)
+	}
 	conn.WriteLine("IQUI AAAX RD%s", *target)
 }
