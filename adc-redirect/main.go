@@ -75,6 +75,7 @@ func main() {
 	if *target == "" {
 		fmt.Println("no redirect target specified")
 		flag.Usage()
+		fmt.Print("\n")
 		messageUsage()
 		os.Exit(-1)
 	}
@@ -161,7 +162,7 @@ func main() {
 func messageUsage() {
 	fmt.Println("A message should contain the message you want displayed to clients.")
 	fmt.Println("The redirector will make substitutions for the following tokens:")
-	fmt.Println("\n %t - the redirect taget")
+	fmt.Println("\t %t - the redirect taget")
 	fmt.Println("\t %n - Nickname of the user")
 	fmt.Println("\t %a - IP address of the user")
 	fmt.Println("\t %% - Becomes '%'")
