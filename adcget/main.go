@@ -36,7 +36,7 @@ func init() {
 func main() {
 	flag.Parse()
 	if len(os.Args) == 1 {
-		fmt.Println(os.Args[0], "is a utility for downloading files from ADC hubs as well as traditional http and https services.")		
+		fmt.Println(os.Args[0], "is a utility for downloading files from ADC hubs as well as traditional http and https services.")
 		fmt.Println("It may be used as the Portage fetch command by adding the following to make.conf:")
 		fmt.Println("FETCHCOMMAND=\"adcget -output \\\"\\${DISTDIR}/\\${FILE}\\\" \\\"\\${URI}\\\"\"")
 		fmt.Println("\nUsage:", os.Args[0], "[OPTIONS] URL")
@@ -85,7 +85,7 @@ func adcClient(url *url.URL, logger *log.Logger) {
 	var done chan uint64
 	search := adc.NewSearch()
 	var config *adc.DownloadConfig
-	
+
 	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
 		if fmt.Sprint(outputFilename) == "" {
 			fmt.Println("No output file specified, exiting.")
@@ -99,7 +99,7 @@ func adcClient(url *url.URL, logger *log.Logger) {
 
 		config = &adc.DownloadConfig{
 			OutputFilename: outputFilename,
-			Hash: tth,
+			Hash:           tth,
 		}
 
 	} else {
@@ -116,9 +116,9 @@ func adcClient(url *url.URL, logger *log.Logger) {
 			config = &adc.DownloadConfig{
 				OutputFilename: outputFilename,
 				SearchFilename: searchFilename,
-				}
 			}
 		}
+	}
 
 	config.Compress = compress
 	dispatcher, _ := adc.NewDownloadDispatcher(config, logger)

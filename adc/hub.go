@@ -236,21 +236,53 @@ func NewHub(pid *Identifier, url *url.URL, logger *log.Logger) (h *Hub, err erro
 	return h, nil
 }
 
-func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
-	if h.conn != nil {
-		if h.features["PING"] {
-			return h.info, nil
-		} else {
-			return nil, Error("hub does not support PING")
-
+func Ping(url *url.URL) (info map[string]*ParameterValue, err error) {
+	var conn *Conn
+	var digest hash.Hash
+	var keyPrint []byte
+	q := url.Query()
+	v, ok := q["kp"]
+	if ok {
+		params := strings.Split(v[0], "/")
+		switch params[0] {
+		case "SHA256":
+			digest = sha256.New()
+			keyPrint, err = base32.StdEncoding.DecodeString(params[1] + "====")
+			if err != nil {
+				return nil, err
+			}
+		default:
+			return nil, Error(params[0] + " KEYP verification is not supported")
 		}
 	}
 
-	c, err := net.Dial("tcp", h.url.Host)
-	if err != nil {
-		return nil, err
+	switch url.Scheme {
+	case "adc":
+		if digest != nil {
+			return nil, Error("KEYP specified but adcs:// was not")
+		}
+		c, err := net.Dial("tcp", url.Host)
+		if err != nil {
+			return nil, err
+		}
+		conn = NewConn(c)
+
+	case "adcs":
+		c, err := tls.Dial("tcp", url.Host, &tls.Config{InsecureSkipVerify: true})
+		if err != nil {
+			return nil, err
+		}
+		if digest != nil {
+			digest.Write(c.ConnectionState().PeerCertificates[0].Raw)
+			if !bytes.Equal(digest.Sum(nil), keyPrint) {
+				return nil, Error("KEYP verification failed, potential man-in-the-middle attack detected")
+			}
+		}
+		conn = NewConn(c)
+
+	default:
+		return nil, Error(url.String() + "unrecognized URL format")
 	}
-	conn := NewConn(c)
 	defer conn.Close()
 
 	conn.WriteLine("HSUP ADBASE ADTIGR ADPING")
@@ -262,16 +294,17 @@ func (h *Hub) Ping() (info map[string]*ParameterValue, err error) {
 	if msg.Cmd != "SUP" {
 		return nil, Error("did not receive SUP: " + msg.String())
 	}
+	features := make(map[string]bool)
 
 	for _, word := range msg.Params {
 		switch word[:2] {
 		case "AD":
-			h.features[word[2:]] = true
+			features[word[2:]] = true
 		default:
 			return nil, Error("unknown word in SUP: " + word)
 		}
 	}
-	if !h.features["PING"] {
+	if !features["PING"] {
 		return nil, Error("hub does not support PING")
 	}
 	for {
@@ -435,8 +468,8 @@ func (h *Hub) newPeer(sid string) *Peer {
 }
 
 // ReverseConnectToMe sends a RCM message to a Peer with token string.
-// A channel is returned that will carry the the port number in the 
-// CTM response. Be sure to use a fresh token, or will nothing will 
+// A channel is returned that will carry the the port number in the
+// CTM response. Be sure to use a fresh token, or will nothing will
 // be coming back down that channel
 func (h *Hub) ReverseConnectToMe(p *Peer, token string) chan uint16 {
 	// RCM protocol separator token

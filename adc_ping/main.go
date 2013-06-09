@@ -1,19 +1,19 @@
 // Copyright © 2013 Emery Hemingway
-//
+
 // adc_ping is a Munin plugin for graphing ADC hub statistics
 //
 // A hub URL must be specified through the environment variable
-// ${hub_url}. This url is used in graph labels so try not to 
+// ${hub_url}. This url is used in graph labels so try not to
 // use 'localhost.
-// 
+//
 // An example config
 // [adc_ping]
 // env.hub_url adc://some-host.net:1511
-
 package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 )
 
@@ -72,25 +72,24 @@ func main() {
 		}
 	}
 
-	url := os.Getenv("hub_url")
-	if len(url) == 0 {
-		fmt.Println("$hub_url was empty")
+	us := os.Getenv("hub_url")
+	if len(us) == 0 {
+		fmt.Println("Error: $hub_url was empty")
 		os.Exit(-1)
 	}
-
-	hub, err := adc.NewHub(url)
+	hubUrl, err := url.Parse(us)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("$hub_url error", err)
 		os.Exit(-1)
 	}
 
-	info, err := hub.Ping()
+	info, err := adc.Ping(hubUrl)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(-1)
 	}
 	var (
-		userCount uint64
+		userCount      uint64
 		totalShareSize uint64
 		totalFileCount uint64
 	)
