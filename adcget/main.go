@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-import "code.google.com/p/go-adc/adc"
-import "code.google.com/p/go-tiger/tiger"
+import "github.com/3M3RY/go-adc/adc"
+import "github.com/3M3RY/go-tiger/tiger"
 
 var ( // Commandline switches
 	searchTTH      string

@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-import "code.google.com/p/go-tiger/tiger"
+import "github.com/3M3RY/go-tiger/tiger"
 
 // States
 const (

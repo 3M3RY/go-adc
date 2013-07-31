@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-import "code.google.com/p/go-adc/adc"
+import "github.com/3M3RY/go-adc/adc"
 
 var (
 	port            = flag.Int("port", 1511, "port to listen for incoming connections on")

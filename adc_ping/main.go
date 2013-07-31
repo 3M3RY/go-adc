@@ -13,11 +13,10 @@ package main
 
 import (
 	"fmt"
+	"github.com/3M3RY/go-adc/adc"
 	"net/url"
 	"os"
 )
-
-import "code.google.com/p/go-adc/adc"
 
 func printConfig() {
 	fmt.Println("multigraph users")

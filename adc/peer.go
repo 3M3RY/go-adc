@@ -6,12 +6,11 @@ import (
 	"bytes"
 	"crypto/rand"
 	"fmt"
+	hashtree "github.com/3M3RY/go-hashtree/hashtree"
+	"github.com/3M3RY/go-tiger/tiger"
 	"net"
 	"sync"
 )
-
-import "code.google.com/p/go-tiger/tiger"
-import "code.google.com/p/go-hashtree/tree"
 
 type Peer struct {
 	hub         *Hub
@@ -39,7 +38,7 @@ func (p *Peer) NextSessionId() uint {
 	return id
 }
 
-// StartSession waits until it is time for the 
+// StartSession waits until it is time for the
 // session with id to begin.
 func (p *Peer) StartSession(id uint) (err error) {
 	p.sessionMu.Lock()
@@ -71,7 +70,7 @@ func (p *Peer) StartSession(id uint) (err error) {
 	return
 }
 
-// EndSession notifies the Peer that the session with the 
+// EndSession notifies the Peer that the session with the
 // numbered id has completed.
 func (p *Peer) EndSession(id uint) {
 	p.sessionMu.Lock()
@@ -169,7 +168,7 @@ func (p *Peer) connect() (err error) {
 	return nil
 }
 
-// Fetch and verify a row of leaves from Peer 
+// Fetch and verify a row of leaves from Peer
 func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err error) {
 	if p.conn == nil {
 		panic("Peer.conn was nil")
@@ -221,7 +220,7 @@ func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err 
 		pos += n
 	}
 
-	tree := tree.New(tiger.New())
+	tree := hashtree.New(tiger.New())
 
 	leafCount := tthSize / 24 // hardcoded to tiger
 	leaves = make([][]byte, leafCount)
