@@ -285,6 +285,8 @@ func hubNormalState(c *Client, invalid chan *Message) (err error) {
 	return nil
 }
 
+// Ping implements the PING extension; see
+// https:///adc.sourceforge.net/ADC-EXT.html#_ping_pinger_extension
 func Ping(url *url.URL) (info FieldMap, err error) {
 	conn, err := connectToHub(url)
 	if err != nil {

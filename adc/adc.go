@@ -108,11 +108,15 @@ var deescaper = strings.NewReplacer(
 // FieldMap is a map type for ADC message fields
 type FieldMap map[string]string
 
+// Format implements the fmt.Formatter interface for FieldMap
+//	%v	AA:arg 1 AB:arg 2
+//	%s	AAarg\s1 ABarg\s2
+//
 func (f FieldMap) Format(s fmt.State, c rune) {
 	switch c {
 	case 'v': // Human readable
 		for k, v := range f {
-			fmt.Fprint(s, k+deescaper.Replace(v))
+			fmt.Fprint(s, k+":"+deescaper.Replace(v))
 		}
 
 	case 's': // Space escaped
@@ -125,6 +129,9 @@ func (f FieldMap) Format(s fmt.State, c rune) {
 // FieldSlice is a slice type for ADC message fields
 type FieldSlice []string
 
+// Format implements the fmt.Formatter interface for FieldSlice
+//	%v	element 1 element 2
+//	%s	element\s1 element\s2
 func (f FieldSlice) Format(s fmt.State, c rune) {
 	switch c {
 	case 'v': // Human readable

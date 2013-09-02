@@ -118,7 +118,8 @@ func (h *connectToMeHandler) Handle(c *Client, m *Message) (err error) {
 	return errors.New("CTM handler cannot handle " + m.String())
 }
 
-// ReverseConnectToMe sends a RCM message to a Peer.
+// ReverseConnectToMe sends a RCM message to a Peer, returning a port and token to
+// connect with, or an error if unsucessful.
 func (p *Peer) ReverseConnectToMe() (port, token string, err error) {
 	token = newToken()
 

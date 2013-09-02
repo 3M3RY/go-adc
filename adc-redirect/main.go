@@ -1,5 +1,6 @@
 // Copyright © 2013 Emery Hemingway
 
+
 package main
 
 import (
@@ -34,8 +35,8 @@ type funcConfig struct {
 }
 
 type clientConfig struct {
-	nick string
-	ip   string
+	nick    string
+	ip      string
 	session *adc.Session
 }
 
