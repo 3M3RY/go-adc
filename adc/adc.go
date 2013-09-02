@@ -1,4 +1,5 @@
-// Copyright 2013 Emery Hemingway.  All rights reserved
+// Copyright © 2013 Emery Hemingway
+// Released under the terms of the GPL-3
 
 package adc
 
@@ -7,13 +8,12 @@ import (
 	"fmt"
 	"hash"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
 )
 
 var PROTOCOL = "ADC/1.0"
-
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
@@ -22,7 +22,6 @@ func init() {
 func newToken() string {
 	return strconv.FormatUint(uint64(rand.Uint32()), 36)
 }
-
 
 /*
 // An Error represents a numeric error response from a server.

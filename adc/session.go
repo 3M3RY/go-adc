@@ -1,3 +1,6 @@
+// Copyright © 2013 Emery Hemingway
+// Released under the terms of the GPL-3
+
 package adc
 
 import (
@@ -22,17 +25,17 @@ var (
 // A Session represents a ADC protocol connection.
 type Session struct {
 	// SID *Identifier
-	r *bufio.Reader
-	w *bufio.Writer
+	r    *bufio.Reader
+	w    *bufio.Writer
 	conn io.ReadWriteCloser
 }
 
 // NewSession returns a new ADC session using conn for I/O.
 func NewSession(rwc io.ReadWriteCloser) *Session {
 	return &Session{
-		r: bufio.NewReader(rwc),
-		w: bufio.NewWriter(rwc),
-		conn:   rwc,
+		r:    bufio.NewReader(rwc),
+		w:    bufio.NewWriter(rwc),
+		conn: rwc,
 	}
 }
 

@@ -1,6 +1,7 @@
-package adc
+// Copyright © 2013 Emery Hemingway
+// Released under the terms of the GPL-3
 
-// TODO make STA handler
+package adc
 
 import (
 	"bytes"
@@ -9,13 +10,13 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"github.com/3M3RY/go-tiger/tiger"
 	"hash"
 	"net"
 	"net/url"
 	"strings"
 )
 
-import "github.com/3M3RY/go-tiger/tiger"
 /*
 type Hub struct {
 	url      *url.URL
@@ -118,7 +119,7 @@ func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (*Client, error) 
 		inf = make(FieldMap)
 	}
 	c := &Client{
-		Session: session,
+		Session:  session,
 		pid:      pid,
 		inf:      inf,
 		handlers: make(map[string]ClientMessageHandler),

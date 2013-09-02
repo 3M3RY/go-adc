@@ -1,3 +1,6 @@
+// Copyright © 2013 Emery Hemingway
+// Released under the terms of the GPL-3
+
 package adc
 
 import (
