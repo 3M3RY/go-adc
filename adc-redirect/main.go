@@ -36,7 +36,7 @@ type funcConfig struct {
 type clientConfig struct {
 	nick string
 	ip   string
-	conn *adc.Conn
+	session *adc.Session
 }
 
 type action interface {
@@ -58,7 +58,7 @@ func (a formatAction) run(c *clientConfig) {
 	a.s = strings.Replace(a.s, "%n", c.nick, -1)
 	a.s = strings.Replace(a.s, "%a", c.ip, -1)
 	a.s = strings.Replace(a.s, "%%", "%", -1)
-	c.conn.WriteLine("IMSG %s", a.s)
+	c.session.WriteLine("IMSG %s", a.s)
 }
 
 type msgAction struct {
@@ -66,9 +66,8 @@ type msgAction struct {
 }
 
 func (a *msgAction) run(c *clientConfig) {
-	c.conn.WriteLine("IMSG %s", a.s)
+	c.session.WriteLine("IMSG %s", a.s)
 }
-	
 
 func main() {
 	flag.Parse()
@@ -172,21 +171,21 @@ func messageUsage() {
 }
 
 func handleConnection(nc net.Conn) {
-	conn := adc.NewConn(nc)
-	defer conn.Close()
+	session := adc.NewSession(nc)
+	defer session.Close()
 
-	msg, err := conn.ReadMessage()
+	msg, err := session.ReadMessage()
 	if err != nil {
 		return
 	}
 	if msg.Cmd != "SUP" {
 		return
 	}
-	conn.WriteLine("ISUP ADBASE ADTIGR")
-	conn.WriteLine("ISID AAAX")
-	conn.WriteLine("IINF CT32 NIRedirector VEgo-adc\\sredirector\\s0.1")
+	session.WriteLine("ISUP ADBASE ADTIGR")
+	session.WriteLine("ISID AAAX")
+	session.WriteLine("IINF CT32 NIRedirector VEgo-adc\\sredirector\\s0.1")
 
-	msg, err = conn.ReadMessage()
+	msg, err = session.ReadMessage()
 	if err != nil {
 		return
 	}
@@ -195,7 +194,7 @@ func handleConnection(nc net.Conn) {
 	}
 
 	var id string
-	c := &clientConfig{ip:nc.RemoteAddr().String(), conn:conn}
+	c := &clientConfig{ip: nc.RemoteAddr().String(), session: session}
 	for _, field := range msg.Params[1:] {
 		switch field[:2] {
 		case "ID":
@@ -216,5 +215,5 @@ func handleConnection(nc net.Conn) {
 	for _, a := range actions {
 		a.run(c)
 	}
-	conn.WriteLine("IQUI AAAX RD%s", *target)
+	session.WriteLine("IQUI AAAX RD%s", *target)
 }

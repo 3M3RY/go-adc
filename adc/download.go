@@ -62,7 +62,7 @@ func (d *DownloadDispatcher) Run(timeout time.Duration) {
 			d.finalChan <- 0
 			return
 		case result = <-d.resultChan:
-			d.fileSize = result.size
+			d.fileSize = result.Size
 			go downloadWorker(d, result)
 		}
 
@@ -94,14 +94,14 @@ func (d *DownloadDispatcher) Run(timeout time.Duration) {
 					fmt.Printf("Error: could not get leaves from %v: %v\n", peer.Nick, err)
 					continue
 				}
-				d.fileSize = result.size
+				d.fileSize = result.Size
 				go downloadWorker(d, result)
 			}
 		}
 
 		go func() {
 			for result := range d.resultChan {
-				if result.size != d.fileSize {
+				if result.Size != d.fileSize {
 					_, err := result.peer.getTigerTreeHashLeaves(d.config.Hash)
 					if err != nil {
 						fmt.Printf("Error: could not get leaves from %v: %v\n", result.peer.Nick, err)
@@ -125,7 +125,7 @@ func (d *DownloadDispatcher) Run(timeout time.Duration) {
 
 func (d *DownloadDispatcher) getChunk(size uint64) *fileChunk {
 	d.chunkMu.Lock()
-	defer d.chunkMu.Unlock()
+	//defer d.chunkMu.Unlock()
 	fmt.Print("\r", d.fileSeek, "/", d.fileSize)
 	if d.fileSeek == d.fileSize {
 		d.finalChan <- d.fileSize
@@ -169,14 +169,14 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			f = "CGET file %s %d %d"
 		}
 
-		err = p.conn.WriteLine(f, r.FullName, chunk.start, chunk.size)
+		err = p.session.WriteLine(f, r.Filename, chunk.start, chunk.size)
 
 		if err != nil {
 			p.EndSession(sessionId)
 			return
 		}
 
-		msg, err := p.conn.ReadMessage()
+		msg, err := p.session.ReadMessage()
 		if err != nil {
 			p.EndSession(sessionId)
 			return
@@ -191,15 +191,15 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			p.EndSession(sessionId)
 			return
 		case "SND":
-			if msg.Params[0] != "file" || msg.Params[1] != r.FullName {
-				p.conn.WriteLine("CSTA 140 invalid\\sarguments.")
+			if msg.Params[0] != "file" || msg.Params[1] != r.Filename {
+				p.session.WriteLine("CSTA 140 invalid\\sarguments.")
 				p.EndSession(sessionId)
 				return
 			}
 			fmt.Sscan(msg.Params[2], &start)
 			fmt.Sscan(msg.Params[3], &size)
 			if start < chunk.start || size > chunk.size {
-				p.conn.WriteLine("CSTA 140 invalid\\sfile\\srange")
+				p.session.WriteLine("CSTA 140 invalid\\sfile\\srange")
 				p.EndSession(sessionId)
 				return
 			}
@@ -211,12 +211,12 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 				case "ZL1":
 					zl = true
 				default:
-					p.conn.WriteLine("CSTA 140 unknown\\sflags")
+					p.session.WriteLine("CSTA 140 unknown\\sflags")
 					p.EndSession(sessionId)
 					return
 				}
 			default:
-				p.conn.WriteLine("CSTA 140 unknown\\sflags")
+				p.session.WriteLine("CSTA 140 unknown\\sflags")
 				p.EndSession(sessionId)
 				return
 
@@ -230,7 +230,7 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 
 		startOfTransfer := time.Now()
 		if zl {
-			r, err := zlib.NewReader(p.conn.R)
+			r, err := zlib.NewReader(p.session.r)
 			if err != nil {
 				p.EndSession(sessionId)
 				return
@@ -239,7 +239,7 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			for pos < int(size) {
 				n, err := r.Read(buf[pos:])
 				if err != nil {
-					p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
+					p.session.WriteLine("CSTA 150 %s", escaper.Replace(err.Error()))
 					p.EndSession(sessionId)
 					return
 				}
@@ -247,9 +247,9 @@ func downloadWorker(d *DownloadDispatcher, r *SearchResult) {
 			}
 		} else {
 			for pos < int(size) {
-				n, err := p.conn.R.Read(buf[pos:])
+				n, err := p.session.r.Read(buf[pos:])
 				if err != nil {
-					p.conn.WriteLine("CSTA 150 %v", NewParameterValue(err.Error()))
+					p.session.WriteLine("CSTA 150 %v", escaper.Replace(err.Error()))
 					p.EndSession(sessionId)
 					return
 				}

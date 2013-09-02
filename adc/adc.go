@@ -3,12 +3,28 @@
 package adc
 
 import (
-	"fmt"
 	"encoding/base32"
+	"fmt"
 	"hash"
+	"math/rand"
 	"strings"
+	"time"
+	"strconv"
 )
 
+var PROTOCOL = "ADC/1.0"
+
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+func newToken() string {
+	return strconv.FormatUint(uint64(rand.Uint32()), 36)
+}
+
+
+/*
 // An Error represents a numeric error response from a server.
 type Status struct {
 	str  string
@@ -21,6 +37,7 @@ func (s *Status) Error() string {
 func NewStatus(msg *Message) *Status {
 	return &Status{fmt.Sprintf("%s %v", msg.Params[0], NewParameterValue(msg.Params[1]))}
 }
+*/
 
 // A ProtocolError describes a protocol violation such
 // as an invalid response or a hung-up connection.
@@ -61,21 +78,20 @@ func NewPrivateID(d []byte) *Identifier {
 func newClientID(pid *Identifier, hash hash.Hash) *Identifier {
 	hash.Write(pid.raw)
 	raw := hash.Sum(nil)
-	s := Base32EncodeString(raw)
+	s := base32EncodeString(raw)
 	return &Identifier{raw, s}
 }
 
 func newSessionID(s string) *Identifier {
-	raw, _ := Base32DecodeString(s)
+	raw, _ := base32DecodeString(s)
 	return &Identifier{raw, s}
 }
 
-func Base32DecodeString(s string) (b []byte, err error) {
-	b, err = base32.StdEncoding.DecodeString(s)
-	return b, err
+func base32DecodeString(s string) (b []byte, err error) {
+	return base32.StdEncoding.DecodeString(s)
 }
 
-func Base32EncodeString(b []byte) string {
+func base32EncodeString(b []byte) string {
 	s := base32.StdEncoding.EncodeToString(b)
 	return strings.Split(s, "=")[0]
 }
@@ -90,24 +106,43 @@ var deescaper = strings.NewReplacer(
 	"\\n", "\n",
 	"\\\\", "\\")
 
-type ParameterValue struct {
-	str string
-}
+// FieldMap is a map type for ADC message fields
+type FieldMap map[string]string
 
-func (v *ParameterValue) String() string {
-	return v.str
-}
-
-func NewParameterValue(s string) *ParameterValue {
-	return &ParameterValue{s}
-}
-
-func (v *ParameterValue) Format(s fmt.State, c rune) {
+func (f FieldMap) Format(s fmt.State, c rune) {
 	switch c {
-	case 's': // Human readable
-		fmt.Fprint(s, deescaper.Replace(v.str))
+	case 'v': // Human readable
+		for k, v := range f {
+			fmt.Fprint(s, k+deescaper.Replace(v))
+		}
 
-	case 'v': // Space escaped
-		fmt.Fprint(s, escaper.Replace(v.str))
+	case 's': // Space escaped
+		for k, v := range f {
+			fmt.Fprint(s, k+escaper.Replace(v))
+		}
 	}
 }
+
+// FieldSlice is a slice type for ADC message fields
+type FieldSlice []string
+
+func (f FieldSlice) Format(s fmt.State, c rune) {
+	switch c {
+	case 'v': // Human readable
+		for _, w := range f {
+			fmt.Fprint(s, deescaper.Replace(w))
+		}
+
+	case 's': // Space escaped
+		for _, w := range f {
+			fmt.Fprint(s, escaper.Replace(w))
+		}
+	}
+}
+
+//func (m Inf) String() (s string) {
+//	for k, v := range(m) {
+//		s = append(s, fmt.Sprintf(" %s%s", escaper.Replace(v)))
+//	}
+//	return
+//}

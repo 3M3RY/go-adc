@@ -1,4 +1,5 @@
 // Copyright (c) 2013 Emery Hemingway
+
 package adc
 
 import (

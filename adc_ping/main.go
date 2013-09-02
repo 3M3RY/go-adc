@@ -94,19 +94,19 @@ func main() {
 	)
 	var n int
 
-	n, err = fmt.Sscan(info["UC"].String(), &userCount)
+	n, err = fmt.Sscan(info["UC"], &userCount)
 	if n != 1 || err != nil {
 		fmt.Printf("error: could not parse user count", err)
 		os.Exit(-1)
 	}
 
-	n, err = fmt.Sscan(info["SS"].String(), &totalShareSize)
+	n, err = fmt.Sscan(info["SS"], &totalShareSize)
 	if n != 1 || err != nil {
 		fmt.Printf("error: could not parse share size", err)
 		os.Exit(-1)
 	}
 
-	n, err = fmt.Sscan(info["SF"].String(), &totalFileCount)
+	n, err = fmt.Sscan(info["SF"], &totalFileCount)
 	if n != 1 || err != nil {
 		fmt.Printf("error: could not parse file count", err)
 		os.Exit(-1)

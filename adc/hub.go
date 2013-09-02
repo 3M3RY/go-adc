@@ -1,45 +1,33 @@
 package adc
 
+// TODO make STA handler
+
 import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"hash"
-	"log"
 	"net"
 	"net/url"
 	"strings"
 )
 
 import "github.com/3M3RY/go-tiger/tiger"
-
-// States
-const (
-	PROTOCOL = iota
-	IDENTIFY
-	VERIFY
-	NORMAL
-	DATA
-)
-
+/*
 type Hub struct {
-	url               *url.URL
-	pid               *Identifier
-	cid               *Identifier
-	sid               *Identifier
-	conn              *Conn
-	hasher            hash.Hash
-	features          map[string]bool
-	info              map[string]*ParameterValue
-	log               *log.Logger
-	peers             map[string]*Peer
-	messages          chan *Message
-	searchRequestChan chan *SearchRequest
-	searchResultChans map[string](chan *SearchResult)
-	rcmChans          map[string](chan uint16)
-	handlers          map[string]func(*Message)
+	url      *url.URL
+	pid      *Identifier
+	cid      *Identifier
+	sid      *Identifier
+	hasher   hash.Hash
+	features map[string]bool
+	peers    map[string]*Peer
+	messages chan *Message
+	rcmChans map[string](chan uint16)
+	handlers map[string]func(*Message)
 }
 
 type HubError struct {
@@ -50,28 +38,33 @@ type HubError struct {
 func (e *HubError) Error() string {
 	return fmt.Sprintf("%s: %s", e.hub.url, e.msg)
 }
+*/
 
-// Connect and authenticate to the hub
-func NewHub(pid *Identifier, url *url.URL, logger *log.Logger) (h *Hub, err error) {
-	h = &Hub{
-		url:               url,
-		pid:               pid,
-		features:          make(map[string]bool),
-		info:              make(map[string]*ParameterValue),
-		messages:          make(chan *Message),
-		log:               logger,
-		peers:             make(map[string]*Peer),
-		searchRequestChan: make(chan *SearchRequest, 32),
-		searchResultChans: make(map[string](chan *SearchResult)),
-		rcmChans:          make(map[string](chan uint16)),
-		handlers:          make(map[string]func(*Message)),
+var errorKeyprint = errors.New("KEYP verification failed, potential man-in-the-middle attack detected")
+
+// handle initial SUP from the hub
+type protocolSUPHandler struct {
+	errChan chan error
+}
+
+func (h *protocolSUPHandler) Handle(c *Client, m *Message) {
+	for _, word := range m.Params {
+		switch word[:2] {
+		case "AD":
+			c.features[word[2:]] = true
+		default:
+			h.errChan <- errors.New("unknown word " + word + " in SUP")
+		}
 	}
+}
 
+func connectToHub(url *url.URL) (*Session, error) {
+	// check for and process a keyprint parameter in url
+	var err error
 	var digest hash.Hash
 	var keyPrint []byte
-	q := h.url.Query()
-	v, ok := q["kp"]
-	if ok {
+	q := url.Query()
+	if v, ok := q["kp"]; ok {
 		params := strings.Split(v[0], "/")
 		switch params[0] {
 		case "SHA256":
@@ -81,136 +74,171 @@ func NewHub(pid *Identifier, url *url.URL, logger *log.Logger) (h *Hub, err erro
 				return nil, err
 			}
 		default:
-			return nil, Error(params[0] + " KEYP verification is not supported")
+			return nil, errors.New(params[0] + " KEYP verification is not supported")
 		}
 	}
-
-	switch h.url.Scheme {
+	// process adc: or adcs:
+	switch url.Scheme {
 	case "adc":
 		if digest != nil {
 			return nil, Error("KEYP specified but adcs:// was not")
 		}
-		c, err := net.Dial("tcp", h.url.Host)
+		conn, err := net.Dial("tcp", url.Host)
 		if err != nil {
 			return nil, err
 		}
-		h.conn = NewConn(c)
+		return NewSession(conn), nil
 
 	case "adcs":
-		c, err := tls.Dial("tcp", h.url.Host, &tls.Config{InsecureSkipVerify: true})
+		conn, err := tls.Dial("tcp", url.Host, &tls.Config{InsecureSkipVerify: true})
 		if err != nil {
 			return nil, err
 		}
 		if digest != nil {
-			digest.Write(c.ConnectionState().PeerCertificates[0].Raw)
+			digest.Write(conn.ConnectionState().PeerCertificates[0].Raw)
 			if !bytes.Equal(digest.Sum(nil), keyPrint) {
-				return nil, Error("KEYP verification failed, potential man-in-the-middle attack detected")
+				return nil, errorKeyprint
 			}
 		}
-		h.conn = NewConn(c)
+		return NewSession(conn), nil
 
 	default:
-		return nil, Error(h.url.String() + "unrecognized URL format")
+		return nil, errors.New("unrecognized URL format " + url.String())
+	}
+}
+
+// NewHubClient connects to a ADC hub url as the user identified by Private ID pid
+func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (*Client, error) {
+	session, err := connectToHub(url)
+	if err != nil {
+		return nil, err
 	}
 
-	go func() {
-		for {
-			msg, err := h.conn.ReadMessage()
-			if err != nil {
-				h.log.Fatal("error parsing reply: ", err)
-			}
-			h.messages <- msg
-		}
-	}()
-
-	//// PROTOCOL ////
-	h.conn.WriteLine("HSUP ADBASE ADTIGR")
-
-	// Get SUP from hub
-	msg := <-h.messages
-
-	if msg.Cmd != "SUP" {
-		s := "did not recieve SUP: "
-		for _, word := range msg.Params {
-			s = s + " " + word
-		}
-		return nil, Error(s)
+	if inf == nil {
+		inf = make(FieldMap)
+	}
+	c := &Client{
+		Session: session,
+		pid:      pid,
+		inf:      inf,
+		handlers: make(map[string]ClientMessageHandler),
+		features: make(map[string]bool),
 	}
 
-	for _, word := range msg.Params {
-		switch word[:2] {
-		case "AD":
-			h.features[word[2:]] = true
-		default:
-			h.log.Println("Error, unknown word %s in SUP", word)
-		}
+	invalidMessages := make(chan *Message, 1024)
+
+	err = hubProtocolState(c, invalidMessages)
+	if err != nil {
+		return nil, err
 	}
 
-	if h.features["TIGR"] {
-		h.hasher = tiger.New()
-		h.cid = newClientID(h.pid, h.hasher)
-	} else {
-		h.conn.Close()
-		return nil, Error("no common hash function")
+	err = hubIdentifyState(c, invalidMessages)
+	if err != nil {
+		return nil, err
 	}
 
-	// Get SID from hub
-	msg = <-h.messages
-	if msg.Cmd != "SID" {
-		h.conn.Close()
-		return nil, Error("did not receive SID assignment from hub")
-	}
-	h.sid = newSessionID(msg.Params[0])
-
-	//// IDENTIFIY ////
-	var nick string
-	if h.url.User != nil {
-		nick = h.url.User.Username()
-	} else {
-		nick = "go-adc"
+	err = hubVerifyState(c, invalidMessages)
+	if err != nil {
+		return nil, err
 	}
 
-	h.conn.WriteLine("BINF %s ID%s PD%s SS0 SF0 APadcget VE0.0 SL0 NI%v",
-		h.sid, h.cid, h.pid, NewParameterValue(nick))
+	go hubNormalState(c, invalidMessages)
+	return c, nil
+}
 
+func hubProtocolState(c *Client, invalid chan *Message) error {
+	c.Session.WriteLine("HSUP ADBASE ADTIGR")
 	for {
-		msg := <-h.messages
+		msg, err := c.Session.ReadMessage()
+		if err != nil {
+			return err
+		}
+
 		switch msg.Cmd {
+		case "STA":
+			code := msg.Params[0]
+			if code[0] != 0 {
+				return errors.New(msg.Params[1])
+			} else {
+				fmt.Println(msg.Params[1])
+			}
+		case "SUP":
+			for _, word := range msg.Params {
+				switch word[:2] {
+				case "AD":
+					c.features[word[2:]] = true
+				default:
+					return fmt.Errorf("unknown word %s in SUP", word)
+				}
+			}
+		case "SID":
+			if !c.features["BASE"] {
+				c.Session.WriteLine("HSTA 244 FCBASE")
+				return errors.New("Did not receive BASE SUP before SID")
+			}
+			if !c.features["TIGR"] {
+				c.Session.WriteLine("HSTA 247 client\\sonly\\ssupports\\sTGR")
+				return errors.New("no common hash function (Tiger)")
+			}
+			c.SessionHash = tiger.New()
+			c.cid = newClientID(c.pid, c.SessionHash)
+
+			if len(msg.Params) != 1 {
+				c.Session.WriteLine("HSTA 240")
+				return fmt.Errorf("received invalid SID '%s'", msg)
+			}
+			c.sid = newSessionID(msg.Params[0])
+			break
+
+		default:
+			invalid <- msg
+		}
+	}
+	return nil
+}
+
+func hubIdentifyState(c *Client, invalid chan *Message) error {
+	if _, ok := c.inf["NI"]; !ok {
+		return errors.New("user nick not specified by INF")
+	}
+	return c.Session.WriteLine("BINF %s ID%s PD%s", c.sid, c.cid, c.pid, c.inf)
+}
+
+func hubVerifyState(c *Client, invalid chan *Message) error {
+	for {
+		msg, err := c.Session.ReadMessage()
+		if err != nil {
+			return err
+		}
+
+		switch msg.Cmd {
+		case "STA":
+			code := msg.Params[0]
+			if code[0] != 0 {
+				return errors.New(msg.Params[1])
+			}
 
 		case "GPA":
-			//// VERIFY ////
-			password, ok := h.url.User.Password()
-			if ok == false {
-				h.conn.Close()
-				return nil, Error("hub requested a password but none was set")
-			}
+			//password, ok := c.url.User.Password()
+			//if ok == false {
+			return errors.New("hub requested a password but none was set")
+			//}
 
-			nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
+			/*
+				nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
 
-			h.hasher.Reset()
-			fmt.Fprint(h.hasher, password)
-			h.hasher.Write(nonce)
-			response := base32.StdEncoding.EncodeToString(h.hasher.Sum(nil))
-			h.conn.WriteLine("HPAS %s", response)
+				c.SessionHash.Reset()
+				fmt.Fprint(c.SessionHash, password)
+				c.SessionHash.Write(nonce)
+				response := base32.StdEncoding.EncodeToString(c.SessionHash.Sum(nil))
+				h.conn.WriteLine("HPAS %s", response)
+			*/
 
 		case "INF":
-			//// NORMAL ////
-			sid := msg.Params[0]
-			if sid == h.sid.String() {
-				go h.runLoop()
-				return h, nil
+			if h, ok := c.handlers["INF"]; ok {
+				h.Handle(c, msg)
 			}
-			p := h.newPeer(sid)
-			h.peers[sid] = p
-			updatePeer(p, msg)
-
-		case "STA":
-			code, _ := fmt.Sscan("%d", msg.Params[0])
-			if code == 0 {
-				h.log.Printf("%s\n", msg.Params[1])
-			} else {
-				return nil, NewStatus(msg)
-			}
+			break
 
 		case "QUI":
 			var reason string
@@ -220,70 +248,47 @@ func NewHub(pid *Identifier, url *url.URL, logger *log.Logger) (h *Hub, err erro
 					reason = field[2:]
 				}
 			}
-			return nil, Error(fmt.Sprintf("kicked by hub: \"%s\"", NewParameterValue(reason)))
-
-		case "MSG":
-			h.log.Println("<hub> %s\n", NewParameterValue(msg.Params[0]))
-
+			return fmt.Errorf("kicked by hub: \"%v\"", reason)
 		default:
-			s := "unknown message recieved before INF list : " + msg.Cmd
-			for _, word := range msg.Params {
-				s = s + " " + word
-			}
-			return nil, Error(s)
+			invalid <- msg
 		}
 	}
-	return h, nil
+	return nil
 }
 
-func Ping(url *url.URL) (info map[string]*ParameterValue, err error) {
-	var conn *Conn
-	var digest hash.Hash
-	var keyPrint []byte
-	q := url.Query()
-	v, ok := q["kp"]
-	if ok {
-		params := strings.Split(v[0], "/")
-		switch params[0] {
-		case "SHA256":
-			digest = sha256.New()
-			keyPrint, err = base32.StdEncoding.DecodeString(params[1] + "====")
-			if err != nil {
-				return nil, err
-			}
-		default:
-			return nil, Error(params[0] + " KEYP verification is not supported")
+func hubNormalState(c *Client, invalid chan *Message) (err error) {
+	for msg := range invalid {
+		switch msg.Cmd {
+		case "GPA", "PAS", "SID":
+			return errors.New("NORMAL is an invalid state for message " + msg.String())
+		}
+
+		err = c.processMessage(msg)
+		if err != nil {
+			return err
 		}
 	}
 
-	switch url.Scheme {
-	case "adc":
-		if digest != nil {
-			return nil, Error("KEYP specified but adcs:// was not")
+	for {
+		msg, err := c.Session.ReadMessage()
+		switch msg.Cmd {
+		case "GPA", "PAS", "SID":
+			return errors.New("NORMAL is an invalid state for message " + msg.String())
 		}
-		c, err := net.Dial("tcp", url.Host)
-		if err != nil {
-			return nil, err
-		}
-		conn = NewConn(c)
 
-	case "adcs":
-		c, err := tls.Dial("tcp", url.Host, &tls.Config{InsecureSkipVerify: true})
+		err = c.processMessage(msg)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if digest != nil {
-			digest.Write(c.ConnectionState().PeerCertificates[0].Raw)
-			if !bytes.Equal(digest.Sum(nil), keyPrint) {
-				return nil, Error("KEYP verification failed, potential man-in-the-middle attack detected")
-			}
-		}
-		conn = NewConn(c)
-
-	default:
-		return nil, Error(url.String() + "unrecognized URL format")
 	}
-	defer conn.Close()
+	return nil
+}
+
+func Ping(url *url.URL) (info FieldMap, err error) {
+	conn, err := connectToHub(url)
+	if err != nil {
+		return nil, err
+	}
 
 	conn.WriteLine("HSUP ADBASE ADTIGR ADPING")
 	msg, err := conn.ReadMessage()
@@ -292,7 +297,8 @@ func Ping(url *url.URL) (info map[string]*ParameterValue, err error) {
 	}
 
 	if msg.Cmd != "SUP" {
-		return nil, Error("did not receive SUP: " + msg.String())
+		err = errors.New("did not receive SUP: " + msg.String())
+		return
 	}
 	features := make(map[string]bool)
 
@@ -307,21 +313,24 @@ func Ping(url *url.URL) (info map[string]*ParameterValue, err error) {
 	if !features["PING"] {
 		return nil, Error("hub does not support PING")
 	}
+
+	info = make(FieldMap)
 	for {
 		msg, err := conn.ReadMessage()
 		if err != nil {
 			return nil, err
 		}
 		if msg.Cmd == "INF" {
-			info = make(map[string]*ParameterValue)
 			for _, word := range msg.Params {
-				info[word[:2]] = NewParameterValue(word[2:])
+				info[word[:2]] = word[2:]
 			}
-			return info, nil
+			break
 		}
 	}
-	return nil, nil
+	return
 }
+
+/*
 
 // RegisterMessageHandler registers function f with message type c.
 // For example, to add a handler for INF messsages, you would use
@@ -329,6 +338,7 @@ func Ping(url *url.URL) (info map[string]*ParameterValue, err error) {
 func (h *Hub) RegisterMessageHandler(c string, f func(*Message)) {
 	h.handlers[c] = f
 }
+
 
 func (h *Hub) runLoop() {
 	for {
@@ -405,17 +415,6 @@ func (h *Hub) runLoop() {
 				h.log.Println("-", h.peers[sid].Nick, "has quit -")
 				delete(h.peers, sid)
 
-			case "STA":
-				// TODO handle STA better
-				h.log.Println(msg)
-				/*
-					var code uint8
-					_, err := fmt.Sscan(msg.Params[0], &code)
-					if err != nil {
-						panic(err.Error())
-					}
-					fmt.Printf("(status-%.3d) %s\n", code, NewParameterValue(msg.Params[1]))
-				*/
 
 			case "CTM":
 				token := msg.Params[4]
@@ -443,6 +442,7 @@ func (h *Hub) runLoop() {
 	}
 }
 
+
 func updatePeer(p *Peer, msg *Message) {
 	for _, field := range msg.Params[1:] {
 		switch field[:2] {
@@ -467,22 +467,7 @@ func (h *Hub) newPeer(sid string) *Peer {
 	}
 }
 
-// ReverseConnectToMe sends a RCM message to a Peer with token string.
-// A channel is returned that will carry the the port number in the
-// CTM response. Be sure to use a fresh token, or will nothing will
-// be coming back down that channel
-func (h *Hub) ReverseConnectToMe(p *Peer, token string) chan uint16 {
-	// RCM protocol separator token
-	c := make(chan uint16)
-	h.rcmChans[token] = c
-	h.conn.WriteLine("DRCM %s %s ADC/1.0 %s", h.sid, p.SID, token)
-	return c
-}
-
-func (h *Hub) Search(r *SearchRequest) {
-	h.searchRequestChan <- r
-}
-
 func (h *Hub) Close() {
 	h.conn.Close()
 }
+*/
