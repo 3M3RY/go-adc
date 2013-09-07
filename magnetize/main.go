@@ -9,7 +9,10 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"strings"
+)
+
+var (
+	exactSource = flag.String("xs", "", "eXact Source link to a file (adc://example.com:1511)")
 )
 
 func main() {
@@ -63,8 +66,13 @@ func main() {
 			continue
 		}
 
-		hash := strings.Split(base32.StdEncoding.EncodeToString(tree.Sum(nil)), "=")[0]
-		fmt.Fprintf(os.Stdout, "magnet:?dn=%s&xl=%d&xt=urn:tree:tiger:%s\n", url.QueryEscape(info.Name()), info.Size(), hash)
+		hash := base32.StdEncoding.EncodeToString(tree.Sum(nil))
+		hash = hash[:len(hash)-1] // Trim the trailing '='
+		magnet := fmt.Sprintf("magnet:?dn=%s&xl=%d&xt=urn:tree:tiger:%s", url.QueryEscape(info.Name()), info.Size(), hash)
+		if *exactSource != "" {
+			magnet = magnet + "&xs=" + *exactSource
+		}
+		fmt.Fprintln(os.Stdout, magnet)
 	}
 	os.Exit(0)
 }
