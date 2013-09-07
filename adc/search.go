@@ -81,7 +81,7 @@ func (s *Search) MustBeDirectory() {
 	s.terms["TY"] = "2"
 }
 
-func (s *Search) AddTTH(tth *TigerTreeHash) {
+func (s *Search) AddTTH(tth *TreeHash) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.terms["TR"] = tth.String()

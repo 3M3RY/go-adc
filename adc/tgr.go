@@ -7,23 +7,23 @@ import (
 	"encoding/base32"
 )
 
-type TigerTreeHash struct {
+type TreeHash struct {
 	raw    []byte
 	cooked string
 }
 
-func (t *TigerTreeHash) String() string {
+func (t *TreeHash) String() string {
 	return t.cooked
 }
 
-func NewTigerTreeHash(s string) (*TigerTreeHash, error) {
+func NewTreeHashFromString(s string) (*TreeHash, error) {
 	b, err := base32.StdEncoding.DecodeString(s + "=")
 	if err != nil {
 		return nil, err
 	}
-	return &TigerTreeHash{b, s}, nil
+	return &TreeHash{b, s}, nil
 }
 
-func NewTigerTreeHashFromBytes(b []byte) *TigerTreeHash {
-	return &TigerTreeHash{b, base32.StdEncoding.EncodeToString(b)}
+func NewTreeHashFromBytes(b []byte) *TreeHash {
+	return &TreeHash{b, base32.StdEncoding.EncodeToString(b)}
 }

@@ -10,7 +10,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"github.com/3M3RY/go-tiger/tiger"
+	"github.com/3M3RY/go-tiger"
 	"hash"
 	"net"
 	"net/url"

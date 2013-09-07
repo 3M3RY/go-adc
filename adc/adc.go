@@ -108,41 +108,74 @@ var deescaper = strings.NewReplacer(
 // FieldMap is a map type for ADC message fields
 type FieldMap map[string]string
 
-// Format implements the fmt.Formatter interface for FieldMap
-//	%v	AA:arg 1 AB:arg 2
-//	%s	AAarg\s1 ABarg\s2
-//
+// Format implements the fmt.Formatter interface for FieldMap,
+// applying ADC escape sequences with %s and replacing escapes with %v.
 func (f FieldMap) Format(s fmt.State, c rune) {
+	if f == nil {
+		fmt.Fprint(s, "<nil>")
+		return
+	}
+	var first = true
 	switch c {
 	case 'v': // Human readable
 		for k, v := range f {
-			fmt.Fprint(s, k+":"+deescaper.Replace(v))
+			if first {
+				fmt.Fprint(s, k+":"+deescaper.Replace(v))
+				first = false
+			} else {
+				fmt.Fprint(s, " "+k+":"+deescaper.Replace(v))
+			}
 		}
 
 	case 's': // Space escaped
 		for k, v := range f {
-			fmt.Fprint(s, k+escaper.Replace(v))
+			if first {
+				fmt.Fprint(s, k+escaper.Replace(v))
+				first = false
+			} else {
+				fmt.Fprint(s, " "+k+escaper.Replace(v))
+			}
 		}
+
+	default: // unknown format
+		fmt.Fprintf(s, "%%!%c(adc.FieldMap=%s)", c, f)
 	}
 }
 
 // FieldSlice is a slice type for ADC message fields
 type FieldSlice []string
 
-// Format implements the fmt.Formatter interface for FieldSlice
-//	%v	element 1 element 2
-//	%s	element\s1 element\s2
+// Format implements the fmt.Formatter interface for FieldSlice,
+// applying ADC escape sequences with %s and replacing escapes with %v.
 func (f FieldSlice) Format(s fmt.State, c rune) {
+	if s == nil {
+		fmt.Fprint(s, "<nil>")
+		return
+	}
+	var first = true
 	switch c {
 	case 'v': // Human readable
 		for _, w := range f {
-			fmt.Fprint(s, deescaper.Replace(w))
+			if first {
+				fmt.Fprint(s, deescaper.Replace(w))
+				first = false
+			} else {
+				fmt.Fprint(s, " "+deescaper.Replace(w))
+			}
 		}
 
 	case 's': // Space escaped
 		for _, w := range f {
-			fmt.Fprint(s, escaper.Replace(w))
+			if first {
+				fmt.Fprint(s, escaper.Replace(w))
+				first = false
+			} else {
+				fmt.Fprint(s, " "+escaper.Replace(w))
+			}
 		}
+
+	default: // unknown format
+		fmt.Fprintf(s, "%%!%c(adc.FieldSlice=%s)", c, s)
 	}
 }
 
