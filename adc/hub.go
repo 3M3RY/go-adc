@@ -6,14 +6,13 @@ import (
 	"crypto/tls"
 	"encoding/base32"
 	"fmt"
+	"github.com/3M3RY/go-tiger"
 	"hash"
 	"log"
 	"net"
 	"net/url"
 	"strings"
 )
-
-import "github.com/3M3RY/go-tiger/tiger"
 
 // States
 const (

@@ -6,8 +6,8 @@ import (
 	"bytes"
 	"crypto/rand"
 	"fmt"
-	hashtree "github.com/3M3RY/go-hashtree/hashtree"
-	"github.com/3M3RY/go-tiger/tiger"
+	"github.com/3M3RY/go-thex"
+	"github.com/3M3RY/go-tiger"
 	"net"
 	"sync"
 )
@@ -220,7 +220,7 @@ func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err 
 		pos += n
 	}
 
-	tree := hashtree.New(tiger.New())
+	tree := thex.New(tiger.New())
 
 	leafCount := tthSize / 24 // hardcoded to tiger
 	leaves = make([][]byte, leafCount)

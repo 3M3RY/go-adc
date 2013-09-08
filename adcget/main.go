@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/3M3RY/go-adc/adc"
+	"github.com/3M3RY/go-tiger"
 	"io"
 	"log"
 	"net/http"
@@ -12,9 +14,6 @@ import (
 	"strings"
 	"time"
 )
-
-import "github.com/3M3RY/go-adc/adc"
-import "github.com/3M3RY/go-tiger/tiger"
 
 var ( // Commandline switches
 	searchTTH      string
