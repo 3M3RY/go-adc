@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	hashtree "github.com/3M3RY/go-hashtree/hashtree"
-	"github.com/3M3RY/go-tiger/tiger"
+	"github.com/3M3RY/go-hashtree"
+	"github.com/3M3RY/go-tiger"
 	"net"
 	"sync"
 )
@@ -135,6 +135,11 @@ func (p *Peer) ReverseConnectToMe() (port, token string, err error) {
 	return
 }
 
+var (
+	addressError = errors.New("no address information for peer")
+	cidError     = errors.New("the CID reported by the hub and client do not match")
+)
+
 func (p *Peer) connect() (err error) {
 	if p.features == nil {
 		p.features = make(map[string]bool)
@@ -142,6 +147,9 @@ func (p *Peer) connect() (err error) {
 
 	var port, token string
 	port, token, err = p.ReverseConnectToMe()
+	if err != nil {
+		return
+	}
 
 	var conn net.Conn
 	if len(p.I4) > 8 {
@@ -149,15 +157,14 @@ func (p *Peer) connect() (err error) {
 	} else if len(p.I6) > 8 {
 		conn, err = net.Dial("tcp6", fmt.Sprintf("[%s]:%d", p.I6, port))
 	} else {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
-		return Error("no address information for peer")
+		err = addressError
 	}
 	if err != nil {
 		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		return err
 	}
-	p.session = NewSession(conn)
 
+	p.session = NewSession(conn)
 	p.session.WriteLine("CSUP ADBASE ADTIGR ADZLIG")
 	msg, err := p.session.ReadMessage()
 	if err != nil {
@@ -171,6 +178,7 @@ func (p *Peer) connect() (err error) {
 		p.session.Close()
 		return Error(msg.String())
 	}
+
 	for _, word := range msg.Params {
 		switch word[:2] {
 		case "AD":
@@ -178,7 +186,7 @@ func (p *Peer) connect() (err error) {
 		default:
 			p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 			p.session.Close()
-			return Error(fmt.Sprintf("unknow word %s in CSUP", word))
+			return fmt.Errorf("unknow word %s in CSUP", word)
 		}
 	}
 
@@ -198,17 +206,17 @@ func (p *Peer) connect() (err error) {
 	if msg.Params[0][2:] != p.CID {
 		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		p.session.Close()
-		return Error("the CID reported by the hub and client do not match")
+		return cidError
 	}
 	return nil
 }
 
 // Fetch and verify a row of leaves from Peer
-func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err error) {
+func (p *Peer) getTigerTreeHashLeaves(th *TreeHash) (leaves [][]byte, err error) {
 	if p.session == nil {
 		panic("Peer.conn was nil")
 	}
-	identifier := "TTH/" + tth.String()
+	identifier := "TTH/" + th.String()
 	p.session.WriteLine("CGET tthl %s 0 -1", identifier)
 
 	msg, err := p.session.ReadMessage()
@@ -272,7 +280,7 @@ func (p *Peer) getTigerTreeHashLeaves(tth *TigerTreeHash) (leaves [][]byte, err 
 	}
 	treeRoot := tree.Sum(nil)
 
-	if !bytes.Equal(treeRoot, tth.raw) {
+	if !bytes.Equal(treeRoot, th.raw) {
 		return nil, Error("leaves failed verification")
 	}
 

@@ -16,7 +16,7 @@ func (t *TreeHash) String() string {
 	return t.cooked
 }
 
-func NewTreeHashFromString(s string) (*TreeHash, error) {
+func NewTreeHash(s string) (*TreeHash, error) {
 	b, err := base32.StdEncoding.DecodeString(s + "=")
 	if err != nil {
 		return nil, err
@@ -24,6 +24,6 @@ func NewTreeHashFromString(s string) (*TreeHash, error) {
 	return &TreeHash{b, s}, nil
 }
 
-func NewTreeHashFromBytes(b []byte) *TreeHash {
-	return &TreeHash{b, base32.StdEncoding.EncodeToString(b)}
-}
+//func NewTreeHashFromBytes(b []byte) *TreeHash {
+//	return &TreeHash{b, base32.StdEncoding.EncodeToString(b)}
+//}

@@ -148,28 +148,27 @@ func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (*Client, error) 
 }
 
 func hubProtocolState(c *Client, invalid chan *Message) error {
+	//fmt.Println("PROTOCOL")
 	c.Session.WriteLine("HSUP ADBASE ADTIGR")
 	for {
 		msg, err := c.Session.ReadMessage()
 		if err != nil {
 			return err
 		}
-
 		switch msg.Cmd {
 		case "STA":
-			code := msg.Params[0]
-			if code[0] != 0 {
-				return errors.New(msg.Params[1])
-			} else {
-				fmt.Println(msg.Params[1])
+			if msg.Params[0][0] != '0' {
+				return fmt.Errorf("%v", msg.Params[1])
 			}
+			invalid <- msg
+
 		case "SUP":
 			for _, word := range msg.Params {
 				switch word[:2] {
 				case "AD":
 					c.features[word[2:]] = true
 				default:
-					return fmt.Errorf("unknown word %s in SUP", word)
+					return fmt.Errorf("unknown word %v in SUP", word)
 				}
 			}
 		case "SID":
@@ -189,7 +188,7 @@ func hubProtocolState(c *Client, invalid chan *Message) error {
 				return fmt.Errorf("received invalid SID '%s'", msg)
 			}
 			c.sid = newSessionID(msg.Params[0])
-			break
+			return nil
 
 		default:
 			invalid <- msg
@@ -199,13 +198,15 @@ func hubProtocolState(c *Client, invalid chan *Message) error {
 }
 
 func hubIdentifyState(c *Client, invalid chan *Message) error {
+	//fmt.Println("IDENTIFIY")
 	if _, ok := c.inf["NI"]; !ok {
 		return errors.New("user nick not specified by INF")
 	}
-	return c.Session.WriteLine("BINF %s ID%s PD%s", c.sid, c.cid, c.pid, c.inf)
+	return c.Session.WriteLine("BINF %s ID%s PD%s %s", c.sid, c.cid, c.pid, c.inf)
 }
 
 func hubVerifyState(c *Client, invalid chan *Message) error {
+	//fmt.Println("VERIFY")
 	for {
 		msg, err := c.Session.ReadMessage()
 		if err != nil {
@@ -214,9 +215,8 @@ func hubVerifyState(c *Client, invalid chan *Message) error {
 
 		switch msg.Cmd {
 		case "STA":
-			code := msg.Params[0]
-			if code[0] != 0 {
-				return errors.New(msg.Params[1])
+			if msg.Params[0][0] != '0' {
+				return fmt.Errorf("%v", msg.Params[1])
 			}
 
 		case "GPA":
@@ -239,7 +239,7 @@ func hubVerifyState(c *Client, invalid chan *Message) error {
 			if h, ok := c.handlers["INF"]; ok {
 				h.Handle(c, msg)
 			}
-			break
+			return nil
 
 		case "QUI":
 			var reason string
@@ -258,6 +258,7 @@ func hubVerifyState(c *Client, invalid chan *Message) error {
 }
 
 func hubNormalState(c *Client, invalid chan *Message) (err error) {
+	//fmt.Println("NORMAL")
 	for msg := range invalid {
 		switch msg.Cmd {
 		case "GPA", "PAS", "SID":
