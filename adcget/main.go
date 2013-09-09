@@ -4,17 +4,18 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/3M3RY/go-adc/adc"
+	"github.com/3M3RY/go-tiger"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
+	"strconv"
 	"strings"
 	"time"
 )
-
-import "github.com/3M3RY/go-adc/adc"
-import "github.com/3M3RY/go-tiger/tiger"
 
 var ( // Commandline switches
 	searchTTH      string
@@ -25,7 +26,6 @@ var ( // Commandline switches
 )
 
 func init() {
-	flag.StringVar(&searchTTH, "tth", "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ", "search for a given Tiger tree hash")
 	flag.StringVar(&outputFilename, "output", "", "output download to given file")
 	flag.DurationVar(&searchTimeout, "timeout", time.Duration(8)*time.Second, "ADC search timeout")
 	// NOT TESTED WITH A CLIENT THAT COMPLIES WITH COMPRESSION REQUEST
@@ -45,7 +45,7 @@ func main() {
 		os.Exit(-1)
 	}
 
-	url, err := url.Parse(flag.Arg(0))
+	u, err := url.Parse(flag.Arg(0))
 	if err != nil {
 		fmt.Println("URL error", err)
 		os.Exit(-1)
@@ -53,21 +53,63 @@ func main() {
 
 	logger := log.New(os.Stderr, "\r", 0)
 
-	switch url.Scheme {
-	case "adc":
-		adcClient(url, logger)
-	case "adcs":
-		adcClient(url, logger)
+	switch u.Scheme {
+	case "adc", "adcs", "magnet":
 	case "http":
-		httpClient(url)
+		httpClient(u)
 	case "https":
-		httpClient(url)
+		httpClient(u)
 	default:
-		logger.Fatalln("Unsupported or unknown url scheme:", url.Scheme)
+		logger.Fatalln("Unsupported or unknown url scheme:", u.Scheme)
 	}
-}
 
-func adcClient(url *url.URL, logger *log.Logger) {
+	q := u.Query()
+
+	if outputFilename == "" {
+		outputFilename = q.Get("dn")
+		if outputFilename == "" {
+			fmt.Println("Filename not specified in URL nor -output flag.")
+			os.Exit(1)
+		}
+	}
+
+	var tth *adc.TreeHash
+	if s := q.Get("xt"); len(s) != 54 || s[:15] != "urn:tree:tiger:" {
+		fmt.Println("Invalid hash:", s)
+		os.Exit(1)
+	} else {
+		tth, err = adc.NewTreeHash(s[15:])
+		if err != nil {
+			fmt.Println("Invalid hash:", s[15:], err)
+			os.Exit(1)
+		}
+	}
+
+	var fileSize uint64
+	if xs := q.Get("xl"); xs != "" {
+		fileSize, err = strconv.ParseUint(xs, 10, 64)
+		if err != nil {
+			fmt.Println("Invalid file size:", xs)
+			os.Exit(1)
+		}
+	}
+	fileSize += 0
+
+	if xs := q.Get("xs"); xs == "" {
+		logger.Fatalln("Hub address not specified in URL (append '&xs=adc://[hub address]:[hub port]' to the url)")
+	} else {
+		u, err = url.Parse(xs)
+	}
+	if err != nil {
+		logger.Fatalln("Error parsing URI XS", err)
+	}
+
+	switch u.Scheme {
+	case "adc", "adcs":
+	default:
+		logger.Fatalln("Unsupported or unknown url scheme:", u.Scheme)
+	}
+
 	hostname, err := os.Hostname()
 	if err != nil {
 		fmt.Printf("error: could not generate client PID, %s\n", err)
@@ -76,66 +118,48 @@ func adcClient(url *url.URL, logger *log.Logger) {
 	fmt.Fprint(hash, hostname, os.Getuid)
 	pid := adc.NewPrivateID(hash.Sum(nil))
 
-	hub, err := adc.NewHub(pid, url, logger)
+	cu, _ := user.Current()
+
+	myInfo := adc.FieldMap{
+		"NI": cu.Username,
+	}
+
+	hub, err := adc.NewHubClient(u, pid, myInfo)
 	if err != nil {
 		fmt.Printf("Could not connect; %s\n", err)
 		return
 	}
 
-	var done chan uint64
+	var done chan error
 	search := adc.NewSearch()
-	var config *adc.DownloadConfig
+	search.AddTTH(tth)
+	hub.Send(search)
 
-	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
-		if fmt.Sprint(outputFilename) == "" {
-			fmt.Println("No output file specified, exiting.")
-			return
-		}
-		tth, err := adc.NewTigerTreeHash(searchTTH)
-		if err != nil {
-			logger.Fatal("Invalid TTH:", err)
-		}
-		search.AddTTH(tth)
-
-		config = &adc.DownloadConfig{
-			OutputFilename: outputFilename,
-			Hash:           tth,
-		}
-
-	} else {
-		elements := strings.Split(url.Path, "/")
-		searchFilename := elements[len(elements)-1]
-		search.AddInclude(searchFilename)
-
-		if fmt.Sprint(outputFilename) == "" {
-			config = &adc.DownloadConfig{
-				OutputFilename: searchFilename,
-				SearchFilename: searchFilename,
-			}
-		} else {
-			config = &adc.DownloadConfig{
-				OutputFilename: outputFilename,
-				SearchFilename: searchFilename,
-			}
-		}
+	select {
+	case <-done:
+		return
 	}
 
-	config.Compress = compress
-	dispatcher, _ := adc.NewDownloadDispatcher(config, logger)
-	search.SetResultChannel(dispatcher.ResultChannel())
-	done = dispatcher.FinalChannel()
+	/*
+		config.Compress = compress
+		dispatcher, _ := adc.NewDownloadDispatcher(config, logger)
+		search.SetResultChannel(dispatcher.ResultChannel())
+		done = dispatcher.FinalChannel()
 
-	hub.Search(search)
-	dispatcher.Run(searchTimeout)
+		search.Send(hub)
+		results := search.Results()
 
-	size := <-done
-	if size == 0 {
-		fmt.Println("failed to find", outputFilename)
-		os.Exit(-1)
-	} else {
-		fmt.Printf("\nDownloaded %d bytes in %s\n", size, time.Since(start))
-		os.Exit(0)
-	}
+		for {
+			select {
+			case r := <-results:
+				dispatcher.AddResult(r)
+
+			case size := <-done:
+				fmt.Printf("\nDownloaded %d bytes in %s\n", size, time.Since(start))
+				os.Exit(0)
+			}
+		}
+	*/
 }
 
 func httpClient(url *url.URL) {

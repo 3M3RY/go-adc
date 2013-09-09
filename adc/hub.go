@@ -43,22 +43,6 @@ func (e *HubError) Error() string {
 
 var errorKeyprint = errors.New("KEYP verification failed, potential man-in-the-middle attack detected")
 
-// handle initial SUP from the hub
-type protocolSUPHandler struct {
-	errChan chan error
-}
-
-func (h *protocolSUPHandler) Handle(c *Client, m *Message) {
-	for _, word := range m.Params {
-		switch word[:2] {
-		case "AD":
-			c.features[word[2:]] = true
-		default:
-			h.errChan <- errors.New("unknown word " + word + " in SUP")
-		}
-	}
-}
-
 func connectToHub(url *url.URL) (*Session, error) {
 	// check for and process a keyprint parameter in url
 	var err error
@@ -109,7 +93,7 @@ func connectToHub(url *url.URL) (*Session, error) {
 }
 
 // NewHubClient connects to a ADC hub url as the user identified by Private ID pid
-func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (*Client, error) {
+func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (Client, error) {
 	session, err := connectToHub(url)
 	if err != nil {
 		return nil, err
@@ -118,169 +102,196 @@ func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (*Client, error) 
 	if inf == nil {
 		inf = make(FieldMap)
 	}
-	c := &Client{
-		Session:  session,
-		pid:      pid,
-		inf:      inf,
-		handlers: make(map[string]ClientMessageHandler),
-		features: make(map[string]bool),
+	c := &client{
+		session:       session,
+		pid:           pid,
+		inf:           inf,
+		handlers:      make(map[string]ClientMessageHandler),
+		tokenHandlers: make(map[string]map[string]ClientMessageHandler),
+		features:      make(map[string]bool),
+		msg:           make(chan *ReceivedMessage, 1024),
+		err:           make(chan error), // Unbuffered to block
 	}
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
 
-	invalidMessages := make(chan *Message, 1024)
+	go func() {
+		var msg *ReceivedMessage
+		var err error
+		for {
+			msg, err = c.session.ReadMessage()
+			if err == nil {
+				c.msg <- msg
+			} else {
+				c.err <- err
+			}
+		}
+	}()
 
-	err = hubProtocolState(c, invalidMessages)
+	var invalid []*ReceivedMessage
+
+	err = hubProtocolState(c, invalid)
 	if err != nil {
 		return nil, err
 	}
 
-	err = hubIdentifyState(c, invalidMessages)
+	err = hubIdentifyState(c, invalid)
 	if err != nil {
 		return nil, err
 	}
 
-	err = hubVerifyState(c, invalidMessages)
+	err = hubVerifyState(c, invalid)
 	if err != nil {
 		return nil, err
 	}
 
-	go hubNormalState(c, invalidMessages)
+	go hubNormalState(c, invalid)
 	return c, nil
 }
 
-func hubProtocolState(c *Client, invalid chan *Message) error {
-	//fmt.Println("PROTOCOL")
-	c.Session.WriteLine("HSUP ADBASE ADTIGR")
+func hubProtocolState(c *client, invalid []*ReceivedMessage) (err error) {
+	fmt.Println("PROTOCOL")
+	c.session.writeLine("HSUP ADBASE ADTIGR")
 	for {
-		msg, err := c.Session.ReadMessage()
-		if err != nil {
-			return err
-		}
-		switch msg.Cmd {
-		case "STA":
-			if msg.Params[0][0] != '0' {
-				return fmt.Errorf("%v", msg.Params[1])
-			}
-			invalid <- msg
-
-		case "SUP":
-			for _, word := range msg.Params {
-				switch word[:2] {
-				case "AD":
-					c.features[word[2:]] = true
-				default:
-					return fmt.Errorf("unknown word %v in SUP", word)
+		select {
+		case err = <-c.err:
+			return
+		case msg := <-c.msg:
+			//fmt.Println("msg:", msg, "type:", msg.Type, "cmd:", msg.Command,"params:", msg.Params)
+			switch msg.Command {
+			case "STA":
+				if msg.Params[0][0] != '0' {
+					return fmt.Errorf(msg.String())
 				}
-			}
-		case "SID":
-			if !c.features["BASE"] {
-				c.Session.WriteLine("HSTA 244 FCBASE")
-				return errors.New("Did not receive BASE SUP before SID")
-			}
-			if !c.features["TIGR"] {
-				c.Session.WriteLine("HSTA 247 client\\sonly\\ssupports\\sTGR")
-				return errors.New("no common hash function (Tiger)")
-			}
-			c.SessionHash = tiger.New()
-			c.cid = newClientID(c.pid, c.SessionHash)
+				invalid = append(invalid, msg)
 
-			if len(msg.Params) != 1 {
-				c.Session.WriteLine("HSTA 240")
-				return fmt.Errorf("received invalid SID '%s'", msg)
-			}
-			c.sid = newSessionID(msg.Params[0])
-			return nil
+			case "SUP":
+				for _, word := range msg.Params {
+					switch word[:2] {
+					case "AD":
+						fmt.Println(word[2:])
+						c.features[word[2:]] = true
+					default:
+						return fmt.Errorf("unknown word %v in SUP", word)
+					}
+				}
 
-		default:
-			invalid <- msg
+			case "SID":
+				if !c.features["BASE"] {
+					c.session.writeLine("HSTA 244 FCBASE")
+					return errors.New("Did not receive BASE SUP before SID")
+				}
+				if !c.features["TIGR"] {
+					c.session.writeLine("HSTA 247 client\\sonly\\ssupports\\sTGR")
+					return errors.New("no common hash function (no Tiger)")
+				}
+				c.sessionHash = tiger.New()
+				c.cid = newClientID(c.pid, c.sessionHash)
+
+				if len(msg.Params) != 1 {
+					c.session.writeLine("HSTA 240")
+					return fmt.Errorf("received invalid SID '%s'", msg)
+				}
+				c.sid = newSessionID(msg.Params[0])
+				return nil
+
+			default:
+				invalid = append(invalid, msg)
+			}
 		}
 	}
-	return nil
+	return
 }
 
-func hubIdentifyState(c *Client, invalid chan *Message) error {
-	//fmt.Println("IDENTIFIY")
+func hubIdentifyState(c *client, invalid []*ReceivedMessage) error {
+	fmt.Println("IDENTIFIY")
 	if _, ok := c.inf["NI"]; !ok {
 		return errors.New("user nick not specified by INF")
 	}
-	return c.Session.WriteLine("BINF %s ID%s PD%s %s", c.sid, c.cid, c.pid, c.inf)
+	return c.session.writeLine("BINF %s ID%s PD%s %s", c.sid, c.cid, c.pid, c.inf)
 }
 
-func hubVerifyState(c *Client, invalid chan *Message) error {
-	//fmt.Println("VERIFY")
+func hubVerifyState(c *client, invalid []*ReceivedMessage) (err error) {
+	fmt.Println("VERIFY")
 	for {
-		msg, err := c.Session.ReadMessage()
-		if err != nil {
-			return err
-		}
-
-		switch msg.Cmd {
-		case "STA":
-			if msg.Params[0][0] != '0' {
-				return fmt.Errorf("%v", msg.Params[1])
-			}
-
-		case "GPA":
-			//password, ok := c.url.User.Password()
-			//if ok == false {
-			return errors.New("hub requested a password but none was set")
-			//}
-
-			/*
-				nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
-
-				c.SessionHash.Reset()
-				fmt.Fprint(c.SessionHash, password)
-				c.SessionHash.Write(nonce)
-				response := base32.StdEncoding.EncodeToString(c.SessionHash.Sum(nil))
-				h.conn.WriteLine("HPAS %s", response)
-			*/
-
-		case "INF":
-			if h, ok := c.handlers["INF"]; ok {
-				h.Handle(c, msg)
-			}
-			return nil
-
-		case "QUI":
-			var reason string
-			for _, field := range msg.Params {
-				switch field[:2] {
-				case "MS":
-					reason = field[2:]
+		select {
+		case err = <-c.err:
+			return
+		case msg := <-c.msg:
+			switch msg.Command {
+			case "STA":
+				if msg.Params[0][0] != '0' {
+					return fmt.Errorf("%v", msg.Params[1])
 				}
+				invalid = append(invalid, msg)
+
+			case "GPA":
+				//password, ok := c.url.User.Password()
+				//if ok == false {
+				return errors.New("hub requested a password but none was set")
+				//}
+
+				/*
+					nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
+
+					c.sessionHash.Reset()
+					fmt.Fprint(c.sessionHash, password)
+					c.sessionHash.Write(nonce)
+					response := base32.StdEncoding.EncodeToString(c.sessionHash.Sum(nil))
+					h.conn.writeLine("HPAS %s", response)
+				*/
+
+			case "INF":
+				invalid = append(invalid, msg)
+				return nil
+
+			case "QUI":
+				var reason string
+				for _, field := range msg.Params {
+					switch field[:2] {
+					case "MS":
+						reason = field[2:]
+					}
+				}
+				return fmt.Errorf("kicked by hub: \"%v\"", reason)
+			default:
+				invalid = append(invalid, msg)
+				return nil
 			}
-			return fmt.Errorf("kicked by hub: \"%v\"", reason)
-		default:
-			invalid <- msg
 		}
 	}
 	return nil
 }
 
-func hubNormalState(c *Client, invalid chan *Message) (err error) {
-	//fmt.Println("NORMAL")
-	for msg := range invalid {
-		switch msg.Cmd {
-		case "GPA", "PAS", "SID":
-			return errors.New("NORMAL is an invalid state for message " + msg.String())
-		}
-
-		err = c.processMessage(msg)
-		if err != nil {
-			return err
-		}
-	}
-
+func hubNormalState(c *client, invalid []*ReceivedMessage) (err error) {
+	fmt.Println("NORMAL")
 	for {
-		msg, err := c.Session.ReadMessage()
-		switch msg.Cmd {
-		case "GPA", "PAS", "SID":
-			return errors.New("NORMAL is an invalid state for message " + msg.String())
+		select {
+		case err = <-c.err:
+			return
+		case msg := <-c.msg:
+			switch msg.Command {
+			case "GPA", "PAS", "SID":
+				return errors.New("NORMAL is an invalid state for message " + msg.String())
+			}
+
+			err = c.processMessage(msg)
+			if err != nil {
+				return err
+			}
 		}
 
-		err = c.processMessage(msg)
-		if err != nil {
-			return err
+		for {
+			msg, err := c.session.ReadMessage()
+			switch msg.Command {
+			case "GPA", "PAS", "SID":
+				return errors.New("NORMAL is an invalid state for message " + msg.String())
+			}
+
+			err = c.processMessage(msg)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -294,13 +305,13 @@ func Ping(url *url.URL) (info FieldMap, err error) {
 		return nil, err
 	}
 
-	conn.WriteLine("HSUP ADBASE ADTIGR ADPING")
+	conn.writeLine("HSUP ADBASE ADTIGR ADPING")
 	msg, err := conn.ReadMessage()
 	if err != nil {
 		return nil, err
 	}
 
-	if msg.Cmd != "SUP" {
+	if msg.Command != "SUP" {
 		err = errors.New("did not receive SUP: " + msg.String())
 		return
 	}
@@ -324,7 +335,7 @@ func Ping(url *url.URL) (info FieldMap, err error) {
 		if err != nil {
 			return nil, err
 		}
-		if msg.Cmd == "INF" {
+		if msg.Command == "INF" {
 			for _, word := range msg.Params {
 				info[word[:2]] = word[2:]
 			}
@@ -349,12 +360,12 @@ func (h *Hub) runLoop() {
 		select {
 		case msg := <-h.messages:
 
-			f, ok := h.handlers[msg.Cmd]
+			f, ok := h.handlers[msg.Command]
 			if ok {
 				f(msg)
 			}
 
-			switch msg.Cmd {
+			switch msg.Command {
 			case "INF":
 				peerSid := msg.Params[0]
 				p := h.peers[peerSid]
@@ -436,12 +447,12 @@ func (h *Hub) runLoop() {
 				}
 
 			default:
-				h.log.Println("unhandled message: ", msg.Cmd, msg.Params)
+				h.log.Println("unhandled message: ", msg.Command, msg.Params)
 			}
 
 		case r := <-h.searchRequestChan:
 			h.searchResultChans[r.token] = r.results
-			h.conn.WriteLine("BSCH %s TO%s %s TY1", h.sid, r.token, r.Terms)
+			h.conn.writeLine("BSCH %s TO%s %s TY1", h.sid, r.token, r.Terms)
 		}
 	}
 }

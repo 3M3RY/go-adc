@@ -4,6 +4,7 @@
 package adc
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 )
@@ -87,14 +88,20 @@ func (s *Search) AddTTH(tth *TreeHash) {
 	s.terms["TR"] = tth.String()
 }
 
-func (s *Search) Send(c *Client) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c.RegisterTokenHandler("RES", s.token, s)
-	return c.Session.WriteLine("BSCH %s TO%s", c.sid, s.token, s.terms, s.stringTerms)
+//func (s *Search) Send(c *Client) error {
+//	s.mu.RLock()
+//	defer s.mu.RUnlock()
+//	c.RegisterTokenHandler("RES", s.token, s)
+//	fmt.Printf("BSCH %s TO%s %s %s\n", c.sid, s.token, s.terms, s.stringTerms)
+//	return c.Send(
+//}
+
+func (s *Search) Message(c Client) string {
+	return fmt.Sprintf("BSCH %s TO%s %s %s", c.SID(), s.token, s.terms, s.stringTerms)
 }
 
-func (s *Search) Handle(c *Client, m *Message) (err error) {
+func (s *Search) Handle(c Client, m *ReceivedMessage) (err error) {
+	fmt.Println(m)
 	r := new(SearchResult)
 	for _, word := range m.Params {
 		switch word[:2] {

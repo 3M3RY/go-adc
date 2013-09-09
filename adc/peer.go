@@ -7,14 +7,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/3M3RY/go-hashtree"
+	"github.com/3M3RY/go-thex"
 	"github.com/3M3RY/go-tiger"
 	"net"
 	"sync"
 )
 
 type Peer struct {
-	client      *Client
+	client      *client
 	CID         string
 	SID         string
 	I4          string
@@ -99,17 +99,17 @@ type connectToMeHandler struct {
 	portChan chan string
 }
 
-func (h *connectToMeHandler) Handle(c *Client, m *Message) (err error) {
+func (h *connectToMeHandler) Handle(c Client, m *ReceivedMessage) (err error) {
 	defer c.UnregisterTokenHandler("CTM", h.token)
 
-	switch m.Cmd {
+	switch m.Command {
 	case "STA":
 		return errors.New(m.String())
 
 	case "CTM":
 		if m.Params[0] != PROTOCOL {
-			c.Session.WriteLine("DSTA %s %s 142 TO%s PR%s",
-				c.sid, h.peer.SID, h.token, PROTOCOL)
+			c.Send(NewMessage("DSTA %s %s 142 TO%s PR%s",
+				c.SID(), h.peer.SID, h.token, PROTOCOL))
 			return errors.New("could not accept ConnectToMe, invalid protocol " + m.Params[0])
 		}
 		h.portChan <- m.Params[1]
@@ -127,7 +127,7 @@ func (p *Peer) ReverseConnectToMe() (port, token string, err error) {
 	p.client.RegisterTokenHandler("CTM", token, h)
 	defer p.client.UnregisterTokenHandler("CTM", token)
 	// RCM protocol separator token
-	err = p.client.Session.WriteLine("DRCM", p.client.sid, p.SID, PROTOCOL, token)
+	err = p.client.session.writeLine("DRCM", p.client.sid, p.SID, PROTOCOL, token)
 	if err != nil {
 		return "", "", err
 	}
@@ -160,21 +160,21 @@ func (p *Peer) connect() (err error) {
 		err = addressError
 	}
 	if err != nil {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+		p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		return err
 	}
 
 	p.session = NewSession(conn)
-	p.session.WriteLine("CSUP ADBASE ADTIGR ADZLIG")
+	p.session.writeLine("CSUP ADBASE ADTIGR ADZLIG")
 	msg, err := p.session.ReadMessage()
 	if err != nil {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+		p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		p.session.Close()
 		return err
 	}
 
-	if err != nil || msg.Cmd != "SUP" {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+	if err != nil || msg.Command != "SUP" {
+		p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		p.session.Close()
 		return Error(msg.String())
 	}
@@ -184,27 +184,27 @@ func (p *Peer) connect() (err error) {
 		case "AD":
 			p.features[word[2:]] = true
 		default:
-			p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+			p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 			p.session.Close()
 			return fmt.Errorf("unknow word %s in CSUP", word)
 		}
 	}
 
-	err = p.session.WriteLine("CINF ID%s TO%s", p.client.cid, token)
+	err = p.session.writeLine("CINF ID%s TO%s", p.client.cid, token)
 	if err != nil {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+		p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		p.session.Close()
 		return err
 	}
 
 	msg, err = p.session.ReadMessage()
-	if err != nil || msg.Cmd != "INF" {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+	if err != nil || msg.Command != "INF" {
+		p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		p.session.Close()
 		return err
 	}
 	if msg.Params[0][2:] != p.CID {
-		p.client.Session.WriteLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
+		p.client.session.writeLine("ISTA 142 TO%s PR%s", token, PROTOCOL)
 		p.session.Close()
 		return cidError
 	}
@@ -217,19 +217,19 @@ func (p *Peer) getTigerTreeHashLeaves(th *TreeHash) (leaves [][]byte, err error)
 		panic("Peer.conn was nil")
 	}
 	identifier := "TTH/" + th.String()
-	p.session.WriteLine("CGET tthl %s 0 -1", identifier)
+	p.session.writeLine("CGET tthl %s 0 -1", identifier)
 
 	msg, err := p.session.ReadMessage()
 	if err != nil {
 		return nil, err
 	}
 
-	switch msg.Cmd {
+	switch msg.Command {
 	//case "STA":
 	//return nil, NewStatus(msg)
 	case "SND":
 		if msg.Params[0] != "tthl" || msg.Params[1] != identifier || msg.Params[2] != "0" {
-			p.session.WriteLine("CSTA 140 Invalid\\sarguments.")
+			p.session.writeLine("CSTA 140 Invalid\\sarguments.")
 			p.session.Close()
 			return nil, Error("received invalid SND" + msg.String())
 		}
@@ -241,12 +241,12 @@ func (p *Peer) getTigerTreeHashLeaves(th *TreeHash) (leaves [][]byte, err error)
 	var tthSize int
 	_, err = fmt.Sscanf(msg.Params[3], "%d", &tthSize)
 	if err != nil {
-		p.session.WriteLine("CSTA 140 Unable\\sto\\sparse\\ssize:\\s" + escaper.Replace(err.Error()))
+		p.session.writeLine("CSTA 140 Unable\\sto\\sparse\\ssize:\\s" + escaper.Replace(err.Error()))
 		p.session.Close()
 		return nil, err
 	}
 	if tthSize < 24 { // hardcoded to the size of tiger
-		p.session.WriteLine("CSTA 140 TTH\\sis\\stoo\\ssmall")
+		p.session.writeLine("CSTA 140 TTH\\sis\\stoo\\ssmall")
 		p.session.Close()
 		return nil, Error(fmt.Sprintf("received a TTH SND with a size smaller than a single leaf"))
 	}
@@ -263,7 +263,7 @@ func (p *Peer) getTigerTreeHashLeaves(th *TreeHash) (leaves [][]byte, err error)
 		pos += n
 	}
 
-	tree := hashtree.New(tiger.New())
+	tree := thex.New(tiger.New())
 
 	leafCount := tthSize / 24 // hardcoded to tiger
 	leaves = make([][]byte, leafCount)

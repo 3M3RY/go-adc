@@ -51,8 +51,8 @@ func (s *Session) ReadMessage() (*ReceivedMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	words := strings.Fields(l[5:])
-	m := &ReceivedMessage{l, l[0], l[1:4], words[1:]}
+	l = l[:len(l)-1]
+	m := &ReceivedMessage{l, l[0], l[1:4], strings.Fields(l[5:])}
 	return m, nil
 }
 
