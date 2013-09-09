@@ -23,6 +23,29 @@ func newToken() string {
 	return strconv.FormatUint(uint64(rand.Uint32()), 36)
 }
 
+// Messager is the interface that wraps the Message method.
+//
+// Message returns an ADC message string, without the trailing newline.
+type Messager interface {
+	Message(c Client) string
+}
+
+// NewMessage returns a Messager that formats as the given args.
+//
+// Use '%s' rather than '%v' where possible, this is because some for objects
+// '%s' formats with ADC escape sequences and '%v' is formatted human-readable.
+func NewMessage(format string, a ...interface{}) Messager {
+	return &messageString{fmt.Sprintf(format, a...)}
+}
+
+type messageString struct {
+	s string
+}
+
+func (m *messageString) Message(c Client) string {
+	return m.s
+}
+
 /*
 // An Error represents a numeric error response from a server.
 type Status struct {
@@ -46,16 +69,16 @@ func (e Error) Error() string {
 	return string(e)
 }
 
-// Message represents an ADC protocol message
-type Message struct {
-	str    string
-	Type   byte
-	Cmd    string
-	Params []string
+// ReceivedMessage represents a received ADC protocol message
+type ReceivedMessage struct {
+	s       string
+	Type    byte
+	Command string
+	Params  []string
 }
 
-func (m *Message) String() string {
-	return m.str
+func (m *ReceivedMessage) String() string {
+	return m.s
 }
 
 // Identifier represents a PID, CID or SID

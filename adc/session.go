@@ -46,22 +46,21 @@ func (s *Session) Close() error {
 	return s.conn.Close()
 }
 
-func (s *Session) ReadMessage() (*Message, error) {
+func (s *Session) ReadMessage() (*ReceivedMessage, error) {
 	l, err := s.readLine()
 	if err != nil {
 		return nil, err
 	}
-	t := l[0]
-	words := strings.Fields(l[1:])
-	m := &Message{l, t, words[0], words[1:]}
+	words := strings.Fields(l[5:])
+	m := &ReceivedMessage{l, l[0], l[1:4], words[1:]}
 	return m, nil
 }
 
 var eom = []byte{'\n'}
 
-// WriteLine may be used to write ADC protocol messages to a Session connection.
+// writeLine may be used to write ADC protocol messages to a Session connection.
 // Omit the trailing newline.
-func (s *Session) WriteLine(format string, a ...interface{}) error {
+func (s *Session) writeLine(format string, a ...interface{}) error {
 	fmt.Fprintf(s.w, format, a...)
 	s.w.Write(eom)
 	return s.w.Flush()

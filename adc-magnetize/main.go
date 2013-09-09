@@ -4,7 +4,7 @@ import (
 	"encoding/base32"
 	"flag"
 	"fmt"
-	"github.com/3M3RY/go-hashtree"
+	"github.com/3M3RY/go-thex"
 	"github.com/3M3RY/go-tiger"
 	"io"
 	"net/url"
@@ -44,7 +44,7 @@ func main() {
 			continue
 		}
 
-		tree := hashtree.New(tiger.New())
+		tree := thex.New(tiger.New())
 		leaf := tiger.New()
 
 		leafChunk := make([]byte, 1025)
