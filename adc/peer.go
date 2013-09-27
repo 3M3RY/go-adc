@@ -14,6 +14,8 @@ import (
 )
 
 type Peer struct {
+	info        FieldMap
+	infoMu      sync.RWMutex
 	client      *client
 	CID         string
 	SID         string
@@ -28,6 +30,15 @@ type Peer struct {
 	sessionMu   sync.Mutex
 	sessionId   uint
 	sessionWait map[uint]chan uint
+}
+
+func newPeer(SID string) (p *Peer) {
+	p = &Peer{
+		SID:         SID,
+		info:        make(FieldMap),
+		sessionWait: make(map[uint]chan uint),
+	}
+	return
 }
 
 // NextSession returns the next id for a communication session.
@@ -285,4 +296,16 @@ func (p *Peer) getTigerTreeHashLeaves(th *TreeHash) (leaves [][]byte, err error)
 	}
 
 	return
+}
+
+func (p *Peer) update(fields []string) {
+	p.infoMu.Lock()
+	defer p.infoMu.Unlock()
+	for _, f := range fields {
+		if len(f) == 2 {
+			delete(p.info, f)
+		} else {
+			p.info[f[:2]] = f[2:]
+		}
+	}
 }

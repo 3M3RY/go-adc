@@ -4,7 +4,7 @@
 package adc
 
 import (
-	"errors"
+	//"errors"
 	"hash"
 	"sync"
 )
@@ -19,6 +19,7 @@ type Client interface {
 	RegisterTokenHandler(action, token string, h ClientMessageHandler)
 	UnregisterHandler(action string)
 	UnregisterTokenHandler(action, token string)
+	Peer(SID string) *Peer
 }
 
 type client struct {
@@ -33,11 +34,15 @@ type client struct {
 	sessionWait   map[uint]chan uint
 	sessionHash   hash.Hash // hash interface to session hash function, see https://adc.sourceforge.net/ADC.html#_session_hash
 	inf           FieldMap
+	handlersMu    sync.RWMutex
 	handlers      map[string]ClientMessageHandler
 	tokenHandlers map[string]map[string]ClientMessageHandler
 	features      map[string]bool
-	msg           chan *ReceivedMessage
+	egress        chan Messager
+	ingress       chan *ReceivedMessage
 	err           chan error
+	peersMu       sync.RWMutex
+	peers         map[string]*Peer
 }
 
 func (c *client) PID() *Identifier { return c.pid }
@@ -56,12 +61,15 @@ type ClientMessageHandler interface {
 //}
 
 func (c *client) processMessage(m *ReceivedMessage) (err error) {
-	if th, ok := c.tokenHandlers[m.Command]; ok {
+	c.handlersMu.RLock()
+	defer c.handlersMu.RUnlock()
+	if hm, ok := c.tokenHandlers[m.Command]; ok {
 		for _, w := range m.Params {
-			if w[2:] == "TO" {
-				if h, ok := th[w[:2]]; ok {
+			if w[:2] == "TO" {
+				if h, ok := hm[w[2:]]; ok {
 					return h.Handle(c, m)
 				} else {
+					panic("token not found")
 					break
 				}
 			}
@@ -124,10 +132,14 @@ func (c *client) EndSession(id uint) {
 }
 
 func (c *client) RegisterHandler(action string, h ClientMessageHandler) {
+	c.handlersMu.Lock()
+	defer c.handlersMu.Unlock()
 	c.handlers[action] = h
 }
 
 func (c *client) RegisterTokenHandler(action, token string, h ClientMessageHandler) {
+	c.handlersMu.Lock()
+	defer c.handlersMu.Unlock()
 	m, ok := c.tokenHandlers[action]
 	if !ok {
 		m = make(map[string]ClientMessageHandler)
@@ -145,14 +157,15 @@ func (c *client) UnregisterTokenHandler(action, token string) {
 }
 
 func (c *client) Send(m Messager) (err error) {
-	id := c.NextSessionId()
-	err = c.StartSession(id)
-	defer c.EndSession(id)
-	if err == nil {
-		err = c.session.writeLine(m.Message(c))
-	}
-	if err != nil {
-		err = errors.New("Failed to send " + m.Message(c) + ", " + err.Error())
-	}
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+	c.egress <- m
+	// BUG(emery): no error handling defined
 	return
+}
+
+func (c *client) Peer(SID string) *Peer {
+	c.peersMu.RLock()
+	defer c.peersMu.RUnlock()
+	return c.peers[SID]
 }

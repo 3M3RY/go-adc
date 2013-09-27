@@ -17,31 +17,11 @@ import (
 	"strings"
 )
 
-/*
-type Hub struct {
-	url      *url.URL
-	pid      *Identifier
-	cid      *Identifier
-	sid      *Identifier
-	hasher   hash.Hash
-	features map[string]bool
-	peers    map[string]*Peer
-	messages chan *Message
-	rcmChans map[string](chan uint16)
-	handlers map[string]func(*Message)
-}
-
-type HubError struct {
-	hub *Hub
-	msg string
-}
-
-func (e *HubError) Error() string {
-	return fmt.Sprintf("%s: %s", e.hub.url, e.msg)
-}
-*/
-
-var errorKeyprint = errors.New("KEYP verification failed, potential man-in-the-middle attack detected")
+var (
+	errorKeyprint     = errors.New("KEYP verification failed, potential man-in-the-middle attack detected")
+	errorSUP          = errors.New("Did not receive BASE SUP before SID")
+	errorNoCommonHash = errors.New("no common hash function (no Tiger)")
+)
 
 func connectToHub(url *url.URL) (*Session, error) {
 	// check for and process a keyprint parameter in url
@@ -93,7 +73,7 @@ func connectToHub(url *url.URL) (*Session, error) {
 }
 
 // NewHubClient connects to a ADC hub url as the user identified by Private ID pid
-func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (Client, error) {
+func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap, password string) (Client, error) {
 	session, err := connectToHub(url)
 	if err != nil {
 		return nil, err
@@ -109,8 +89,10 @@ func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (Client, error) {
 		handlers:      make(map[string]ClientMessageHandler),
 		tokenHandlers: make(map[string]map[string]ClientMessageHandler),
 		features:      make(map[string]bool),
-		msg:           make(chan *ReceivedMessage, 1024),
+		egress:        make(chan Messager),
+		ingress:       make(chan *ReceivedMessage, 1024),
 		err:           make(chan error), // Unbuffered to block
+		peers:         make(map[string]*Peer),
 	}
 	c.sessionMu.Lock()
 	defer c.sessionMu.Unlock()
@@ -121,7 +103,7 @@ func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (Client, error) {
 		for {
 			msg, err = c.session.ReadMessage()
 			if err == nil {
-				c.msg <- msg
+				c.ingress <- msg
 			} else {
 				c.err <- err
 			}
@@ -129,35 +111,28 @@ func NewHubClient(url *url.URL, pid *Identifier, inf FieldMap) (Client, error) {
 	}()
 
 	var invalid []*ReceivedMessage
-
 	err = hubProtocolState(c, invalid)
 	if err != nil {
 		return nil, err
 	}
-
-	err = hubIdentifyState(c, invalid)
+	err = hubIdentifyState(c)
 	if err != nil {
 		return nil, err
 	}
-
-	err = hubVerifyState(c, invalid)
+	err = hubVerifyState(c, invalid, password)
 	if err != nil {
 		return nil, err
 	}
-
 	go hubNormalState(c, invalid)
 	return c, nil
 }
 
-func hubProtocolState(c *client, invalid []*ReceivedMessage) (err error) {
-	fmt.Println("PROTOCOL")
+func hubProtocolState(c *client, invalid []*ReceivedMessage) error {
+	//fmt.Println("PROTOCOL")
 	c.session.writeLine("HSUP ADBASE ADTIGR")
 	for {
 		select {
-		case err = <-c.err:
-			return
-		case msg := <-c.msg:
-			//fmt.Println("msg:", msg, "type:", msg.Type, "cmd:", msg.Command,"params:", msg.Params)
+		case msg := <-c.ingress:
 			switch msg.Command {
 			case "STA":
 				if msg.Params[0][0] != '0' {
@@ -169,7 +144,6 @@ func hubProtocolState(c *client, invalid []*ReceivedMessage) (err error) {
 				for _, word := range msg.Params {
 					switch word[:2] {
 					case "AD":
-						fmt.Println(word[2:])
 						c.features[word[2:]] = true
 					default:
 						return fmt.Errorf("unknown word %v in SUP", word)
@@ -179,11 +153,11 @@ func hubProtocolState(c *client, invalid []*ReceivedMessage) (err error) {
 			case "SID":
 				if !c.features["BASE"] {
 					c.session.writeLine("HSTA 244 FCBASE")
-					return errors.New("Did not receive BASE SUP before SID")
+					return errorSUP
 				}
 				if !c.features["TIGR"] {
 					c.session.writeLine("HSTA 247 client\\sonly\\ssupports\\sTGR")
-					return errors.New("no common hash function (no Tiger)")
+					return errorNoCommonHash
 				}
 				c.sessionHash = tiger.New()
 				c.cid = newClientID(c.pid, c.sessionHash)
@@ -200,24 +174,30 @@ func hubProtocolState(c *client, invalid []*ReceivedMessage) (err error) {
 			}
 		}
 	}
-	return
 }
 
-func hubIdentifyState(c *client, invalid []*ReceivedMessage) error {
-	fmt.Println("IDENTIFIY")
+func hubIdentifyState(c *client) error {
+	//fmt.Println("IDENTIFIY")
 	if _, ok := c.inf["NI"]; !ok {
 		return errors.New("user nick not specified by INF")
+	} else {
+		err := c.session.writeLine("BINF %s ID%s PD%s %s", c.sid, c.cid, c.pid, c.inf)
+		if err != nil {
+			return err
+		}
 	}
-	return c.session.writeLine("BINF %s ID%s PD%s %s", c.sid, c.cid, c.pid, c.inf)
+	return nil
 }
 
-func hubVerifyState(c *client, invalid []*ReceivedMessage) (err error) {
-	fmt.Println("VERIFY")
+func hubVerifyState(c *client, invalid []*ReceivedMessage, password string) error {
+	//fmt.Println("VERIFY")
+	for _, msg := range invalid {
+		c.ingress <- msg
+	}
+	invalid = invalid[:0]
 	for {
 		select {
-		case err = <-c.err:
-			return
-		case msg := <-c.msg:
+		case msg := <-c.ingress:
 			switch msg.Command {
 			case "STA":
 				if msg.Params[0][0] != '0' {
@@ -226,24 +206,27 @@ func hubVerifyState(c *client, invalid []*ReceivedMessage) (err error) {
 				invalid = append(invalid, msg)
 
 			case "GPA":
-				//password, ok := c.url.User.Password()
-				//if ok == false {
-				return errors.New("hub requested a password but none was set")
-				//}
+				if password == "" {
+					return errors.New("hub requested a password but none was set")
+				}
 
-				/*
-					nonce, _ := base32.StdEncoding.DecodeString(msg.Params[0])
+				nonce, err := base32.StdEncoding.DecodeString(msg.Params[0])
+				if err != nil {
+					c.session.writeLine("STA 220 Failed\\sto\\sdecode\\snonce:\\s%s", escaper.Replace(err.Error()))
+					return err
+				}
 
-					c.sessionHash.Reset()
-					fmt.Fprint(c.sessionHash, password)
-					c.sessionHash.Write(nonce)
-					response := base32.StdEncoding.EncodeToString(c.sessionHash.Sum(nil))
-					h.conn.writeLine("HPAS %s", response)
-				*/
+				c.sessionHash.Reset()
+				fmt.Fprint(c.sessionHash, password)
+				c.sessionHash.Write(nonce)
+				response := base32.StdEncoding.EncodeToString(c.sessionHash.Sum(nil))
+				c.session.writeLine("HPAS %s", response)
 
 			case "INF":
-				invalid = append(invalid, msg)
-				return nil
+				c.processInf(msg)
+				if msg.Params[0] == c.SID().String() {
+					return nil
+				}
 
 			case "QUI":
 				var reason string
@@ -256,45 +239,50 @@ func hubVerifyState(c *client, invalid []*ReceivedMessage) (err error) {
 				return fmt.Errorf("kicked by hub: \"%v\"", reason)
 			default:
 				invalid = append(invalid, msg)
-				return nil
 			}
 		}
 	}
-	return nil
 }
 
-func hubNormalState(c *client, invalid []*ReceivedMessage) (err error) {
-	fmt.Println("NORMAL")
-	for {
-		select {
-		case err = <-c.err:
+func hubNormalState(c *client, invalid []*ReceivedMessage) {
+	//fmt.Println("NORMAL")
+	for _, msg := range invalid {
+		c.ingress <- msg
+	}
+	select {
+	case msg := <-c.ingress:
+		switch msg.Command {
+		case "GPA", "PAS", "SID":
+			c.err <- errors.New("NORMAL is an invalid state for message " + msg.String())
 			return
-		case msg := <-c.msg:
-			switch msg.Command {
-			case "GPA", "PAS", "SID":
-				return errors.New("NORMAL is an invalid state for message " + msg.String())
-			}
-
-			err = c.processMessage(msg)
-			if err != nil {
-				return err
-			}
+		case "INF":
+			c.processInf(msg)
 		}
 
-		for {
-			msg, err := c.session.ReadMessage()
-			switch msg.Command {
-			case "GPA", "PAS", "SID":
-				return errors.New("NORMAL is an invalid state for message " + msg.String())
-			}
+		err := c.processMessage(msg)
+		if err != nil {
+			c.err <- err
+			panic(err.Error())
+		}
 
-			err = c.processMessage(msg)
-			if err != nil {
-				return err
-			}
+	case msg := <-c.egress:
+		err := c.session.writeLine(msg.Message(c))
+		if err != nil {
+			c.err <- err
 		}
 	}
-	return nil
+}
+
+func (c *client) processInf(msg *ReceivedMessage) {
+	sid := msg.Params[0]
+	c.peersMu.Lock()
+	p, ok := c.peers[sid]
+	if !ok {
+		p = newPeer(sid)
+		c.peers[sid] = p
+	}
+	c.peersMu.Unlock()
+	p.update(msg.Params[1:])
 }
 
 // Ping implements the PING extension; see
