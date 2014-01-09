@@ -1,9 +1,9 @@
 A Go library for interacting with ADC hubs and clients. The library has yet to form a coherent API, but the following utilities work reasonably well:
 
-### adcget
+===adcget===
 Fetches files from a hub by filename or Tiger Tree Hash with multi-sourced download. Supports http and https GET as well for backwards compatibility with utilities like wget. Can be used as the `$FETCHCOMMAND` in the Gentoo Portage package manager.
 
-`go get code.google.com/p/go-adc/adcget`
+`go get github.com/3M3RY/go-adc/adcget`
 
 > Usage: adcget [OPTIONS] URL
 > Options:
@@ -11,17 +11,18 @@ Fetches files from a hub by filename or Tiger Tree Hash with multi-sourced downl
 >   -output="": output download to given file
 >   -timeout=8s: ADC search timeout
 >   -tth="LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ": search for a given Tiger tree hash
+>
 
-
-### adc_ping
+===adc_ping===
 A Munin plugin to ping hubs and graph statistics.
 
-`go get code.google.com/p/go-adc/adc_ping`
+`go get github.com/3M3RY/go-adc/adc_ping`
 
-### adc-redirect
+
+===adc-redirect===
 A hub redirector with TLS support.
 
-`go get code.google.com/p/go-adc/adc-redirect`
+`go get github.com/3M3RY/go-adc/adc-redirect`
 
 > Usage of adc-redirect:
 >   -cert="": TLS certificate file
@@ -41,5 +42,14 @@ A hub redirector with TLS support.
 > instruct the redirector to wait before continuing. Valid time units are
 > 'ns', 'us' (or 'µs'), 'ms', 's', 'm', 'h'.
 
-### adc-magnetize
+===adc-magnetize===
 Hashes files and prints magnet links suitable for ADC.
+
+`go get code.google.com/p/go-adc/adc-magnetize`
+
+> Usage of adc-magnetize:
+>  -xs="": eXact Source link to a file (adc://example.com:1511)
+>
+> Example:
+> $ adc-magnetize "Rite Near the Beach Boiii - Earth Mofo.ogg" 
+>> magnet:?dn=Rite+Near+the+Beach+Boiii+-+Earth+Mofo.ogg&xl=2194545&xt=urn:tree:tiger:UMJ3QQSBLQ2LTNNNCP2FESQLJL5O4KQXGOD2UEQ
