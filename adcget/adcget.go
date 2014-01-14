@@ -47,22 +47,47 @@ func main() {
 	url, err := url.Parse(flag.Arg(0))
 	if err != nil {
 		fmt.Println("URL error", err)
-		os.Exit(-1)
+		os.Exit(1)
 	}
 
 	logger := log.New(os.Stderr, "\r", 0)
 
+	if url.Scheme == "magnet" {
+		var ok bool
+		var ss []string
+		values := url.Query()
+
+		if ss, ok = values["dn"]; ok {
+			outputFilename = ss[0]
+		}
+		if ss, ok = values["xt"]; ok {
+			s := ss[0]
+			i := strings.Index(s, "urn:tree:tiger:")
+			if i == -1 {
+				fmt.Println("tiger tree hash not specified in magnet link")
+				os.Exit(1)
+			}
+			i += 15
+			searchTTH = s[i : i+39]
+		}
+		if ss, ok = values["xs"]; ok {
+			url, err = url.Parse(ss[0])
+			if err != nil {
+				fmt.Println("Error parsing magnet XS url,", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Println("Hub url not encoded in magnet link, cannot continue")
+			os.Exit(1)
+		}
+	}
 	switch url.Scheme {
-	case "adc":
+	case "adc", "adcs":
 		adcClient(url, logger)
-	case "adcs":
-		adcClient(url, logger)
-	case "http":
-		httpClient(url)
-	case "https":
+	case "http", "https":
 		httpClient(url)
 	default:
-		logger.Fatalln("Unsupported or unknown url scheme:", url.Scheme)
+		logger.Fatalln("Unsupported or unknown url scheme: ", url.Scheme)
 	}
 }
 
@@ -85,7 +110,7 @@ func adcClient(url *url.URL, logger *log.Logger) {
 	search := adc.NewSearch()
 	var config *adc.DownloadConfig
 
-	if fmt.Sprint(searchTTH) != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
+	if searchTTH != "LWPNACQDBZRYXW3VHJVCJ64QBZNGHOHHHZWCLNQ" {
 		if fmt.Sprint(outputFilename) == "" {
 			fmt.Println("No output file specified, exiting.")
 			return
